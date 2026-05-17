@@ -58,6 +58,7 @@ pub struct App {
     mode: GameMode,
     menu_options: Vec<String>,
     quit: bool,
+    muted: bool,
     action_tx: mpsc::UnboundedSender<PlayerAction>,
     sound: Option<SoundEngine>,
 }
@@ -86,6 +87,7 @@ impl App {
             mode: GameMode::Processing,
             menu_options: vec![],
             quit: false,
+            muted: false,
             action_tx,
             sound: SoundEngine::try_init(),
         }
@@ -124,6 +126,15 @@ impl App {
         // Game over: any key exits
         if matches!(self.mode, GameMode::GameOver { .. }) {
             self.quit = true;
+            return;
+        }
+
+        // Mute toggle — works in all modes
+        if code == KeyCode::Char('m') {
+            self.muted = !self.muted;
+            if let Some(s) = &self.sound {
+                if self.muted { s.mute(); } else { s.unmute(); }
+            }
             return;
         }
 
@@ -223,8 +234,10 @@ impl App {
                 self.status = label;
             }
             Msg::Sound(cue) => {
-                if let Some(s) = &self.sound {
-                    s.play(cue);
+                if !self.muted {
+                    if let Some(s) = &self.sound {
+                        s.play(cue);
+                    }
                 }
             }
             Msg::GameOver { won, reason } => {
@@ -249,17 +262,21 @@ impl App {
 
         let area = frame.area();
 
-        let outer = Layout::default()
+        // Dynamic bottom panel height: borders(2) + status(1) + nearby? + menu? + keys(1)
+        let nearby_lines: u16 = if !self.nearby.is_empty() { 1 } else { 0 };
+        let menu_lines: u16 = if matches!(self.mode, GameMode::AwaitingChoice) && !self.menu_options.is_empty() {
+            (1 + self.menu_options.len()) as u16 // "— choose —" + N options
+        } else {
+            0
+        };
+        let bottom_h = 2 + 1 + nearby_lines + menu_lines + 1;
+
+        let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(3)])
+            .constraints([Constraint::Min(1), Constraint::Length(bottom_h)])
             .split(area);
 
-        let inner = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(outer[0]);
-
-        // Narrative pane
+        // Full-width narrative pane
         let spinner = if self.streaming { " ▒" } else { "" };
         let narrative = Paragraph::new(self.narrative.as_str())
             .block(
@@ -271,67 +288,53 @@ impl App {
             .wrap(Wrap { trim: false })
             .scroll((self.scroll, 0))
             .style(Style::default().fg(Color::Gray));
-        frame.render_widget(narrative, inner[0]);
+        frame.render_widget(narrative, chunks[0]);
 
-        // Sidebar
+        // Bottom panel: status · nearby? · menu? · keybindings
         let sanity_bars = sanity_bar(self.player_sanity);
         let mut lines: Vec<Line> = vec![
-            Line::from(format!(" {}", self.player_name)),
-            Line::from(format!(" {}", self.phase_label)),
-            Line::from(""),
-            Line::from(format!(" Sanity  {} {:>3}", sanity_bars, self.player_sanity)),
-            Line::from(format!(" Alive   {:>2} / 55", self.alive_count)),
+            Line::from(Span::styled(
+                format!("  {} · {} · {} {} · {}/55",
+                    self.player_name, self.phase_label,
+                    sanity_bars, self.player_sanity, self.alive_count),
+                Style::default().fg(Color::Gray),
+            )),
         ];
 
         if !self.nearby.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(" Nearby"));
-            for npc in &self.nearby {
-                lines.push(Line::from(format!("  • {}", npc.name)));
-            }
+            let names: Vec<&str> = self.nearby.iter().map(|n| n.name.as_str()).collect();
+            lines.push(Line::from(Span::styled(
+                format!("  Nearby: {}", names.join(", ")),
+                Style::default().fg(Color::DarkGray),
+            )));
         }
 
         if matches!(self.mode, GameMode::AwaitingChoice) && !self.menu_options.is_empty() {
-            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                " — choose —",
+                "  — choose —",
                 Style::default().fg(Color::Yellow),
             )));
             for (i, opt) in self.menu_options.iter().enumerate() {
                 lines.push(Line::from(Span::styled(
-                    format!(" [{}] {}", i + 1, opt),
+                    format!("  [{}] {}", i + 1, opt),
                     Style::default().fg(Color::White),
                 )));
             }
         }
 
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!(" {}", self.status),
-            Style::default().fg(Color::DarkGray),
-        )));
-
-        let sidebar = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(Span::styled(" Status ", Style::default().fg(Color::DarkGray))),
-            )
-            .wrap(Wrap { trim: false })
-            .style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(sidebar, inner[1]);
-
-        // Bottom bar
-        let bottom_text = match &self.mode {
+        let mute_label = if self.muted { "[m] unmute" } else { "[m] mute" };
+        let keys = match &self.mode {
             GameMode::AwaitingChoice =>
-                "  [1–5] choose   [J] journal   [↑↓/jk] scroll   [Q/Esc] quit  ",
+                format!("  [1–5] choose   [J] journal   {mute_label}   [↑↓/jk] scroll   [Q/Esc] quit  "),
             _ =>
-                "  Processing…                  [↑↓/jk] scroll   [Q/Esc] quit  ",
+                format!("  Processing…   {mute_label}   [↑↓/jk] scroll   [Q/Esc] quit  "),
         };
-        let menu_bar = Paragraph::new(bottom_text)
+        lines.push(Line::from(Span::styled(keys, Style::default().fg(Color::DarkGray))));
+
+        let bottom = Paragraph::new(lines)
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(menu_bar, outer[1]);
+        frame.render_widget(bottom, chunks[1]);
     }
 
     fn render_journal(&self, frame: &mut Frame) {

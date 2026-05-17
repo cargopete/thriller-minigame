@@ -23,6 +23,8 @@ pub enum DirectorCall {
     EndTurnNarrative {
         prose_seed: String,
         mood: String,
+        next_actions: Vec<String>,
+        location: Option<String>,
     },
     GrantFragment {
         npc_id: String,

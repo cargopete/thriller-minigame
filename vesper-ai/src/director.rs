@@ -4,6 +4,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use vesper_core::{events::DirectorCall, state::GameState, world::WORLD_BIBLE};
 
+use crate::auth::Auth;
+
 const DIRECTOR_SYSTEM: &str = "\
 You are the Director of VESPER, a survival horror game set in Ash Hollow. \
 You control the narrative exclusively through tool calls — never write prose. \
@@ -12,10 +14,9 @@ The Narrator writes the actual text; your job is mechanics and consequences.\n\
 HARD RULES:\n\
 - Monsters can only kill at night (kill_npc with cause=monster is ONLY valid when phase=night).\n\
 - Dead NPCs stay dead; do not call npc_action or kill_npc on a dead NPC.\n\
-- Phase transitions must be sequential: dawn→day→dusk→night→dawn.\n\
-- Call end_turn_narrative before advance_phase.\n\
-- Call advance_phase exactly once, as your absolute final tool call.\n\
 - Never name or hint at the identity of the two Rememberers in prose seeds.\n\
+- end_turn_narrative is REQUIRED every turn. next_actions must contain 3-5 specific, \
+  concrete player actions grounded in the current scene.\n\
 \n\
 REMEMBERERS:\n\
 The two Rememberers are iris_calloway and wren_adisa. Only they can collect memory fragments. \
@@ -62,14 +63,23 @@ fn tool_schemas() -> Value {
         },
         {
             "name": "end_turn_narrative",
-            "description": "Required: emit a prose seed for the Narrator. Call this BEFORE advance_phase.",
+            "description": "Required: emit a prose seed for the Narrator and the next player actions. Call this BEFORE advance_phase.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "prose_seed": {"type": "string", "maxLength": 500},
-                    "mood": {"enum": ["tense","quiet","grief","dread","relief","confusion"]}
+                    "mood": {"enum": ["tense","quiet","grief","dread","relief","confusion"]},
+                    "next_actions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "3-5 specific, concrete actions the player can take next, grounded in this exact scene"
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "Where the player is now (e.g. 'diner', 'town_square', 'church', 'residential', 'road'). Set this whenever the player moves."
+                    }
                 },
-                "required": ["prose_seed","mood"],
+                "required": ["prose_seed","mood","next_actions"],
                 "additionalProperties": false
             }
         },
@@ -87,26 +97,12 @@ fn tool_schemas() -> Value {
                 "additionalProperties": false
             }
         },
-        {
-            "name": "advance_phase",
-            "description": "Advance time. Call this exactly once, as your FINAL tool call.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "from": {"enum": ["dawn","day","dusk","night"]},
-                    "to":   {"enum": ["dawn","day","dusk","night"]},
-                    "day":  {"type": "integer", "minimum": 1, "maximum": 20}
-                },
-                "required": ["from","to","day"],
-                "additionalProperties": false
-            }
-        }
     ])
 }
 
 pub struct DirectorClient {
     http: Client,
-    api_key: String,
+    auth: Auth,
 }
 
 #[derive(Deserialize)]
@@ -123,8 +119,8 @@ struct ContentBlock {
 }
 
 impl DirectorClient {
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), api_key: api_key.into() }
+    pub fn new(auth: Auth) -> Self {
+        Self { http: Client::new(), auth }
     }
 
     pub async fn run_turn(
@@ -165,16 +161,23 @@ impl DirectorClient {
             "messages": [{"role": "user", "content": user_msg}]
         });
 
-        let resp = self
-            .http
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("anthropic-beta", "prompt-caching-2024-07-31")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let mut delay_ms = 2_000u64;
+        let resp = loop {
+            let r = self.auth
+                .apply(self.http.post("https://api.anthropic.com/v1/messages"))
+                .header("anthropic-version", "2023-06-01")
+                .header("anthropic-beta", "prompt-caching-2024-07-31")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+            if r.status().as_u16() != 429 || delay_ms > 16_000 {
+                break r;
+            }
+            eprintln!("[director] rate limited, retrying in {delay_ms}ms…");
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            delay_ms *= 2;
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -228,9 +231,21 @@ fn parse_tool_call(name: &str, input: Value) -> Option<DirectorCall> {
         }
         "end_turn_narrative" => {
             #[derive(Deserialize)]
-            struct I { prose_seed: String, mood: String }
+            struct I {
+                prose_seed: String,
+                mood: String,
+                #[serde(default)]
+                next_actions: Vec<String>,
+                #[serde(default)]
+                location: Option<String>,
+            }
             let i: I = serde_json::from_value(input).ok()?;
-            Some(DirectorCall::EndTurnNarrative { prose_seed: i.prose_seed, mood: i.mood })
+            Some(DirectorCall::EndTurnNarrative {
+                prose_seed: i.prose_seed,
+                mood: i.mood,
+                next_actions: i.next_actions,
+                location: i.location,
+            })
         }
         "grant_fragment" => {
             #[derive(Deserialize)]

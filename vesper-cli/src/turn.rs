@@ -1,4 +1,6 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
+
+use chrono;
 
 use anyhow::Result;
 use tokio::sync::mpsc;
@@ -21,11 +23,11 @@ const DIRECTOR_MODEL: &str = "claude-sonnet-4-6";
 const NARRATOR_MODEL: &str = "claude-sonnet-4-6";
 
 const NARRATOR_SYSTEM: &str = "\
-You are the narrator of VESPER, a survival horror game set in Ash Hollow — a town nobody \
-planned to visit and nobody can leave. Write in third-person past tense. Short sentences. \
-Specific nouns. No metaphors for what is wrong; describe only what the player sees. \
-End every passage on a still, concrete image. Never use the words epic, journey, or adventure. \
-Three short paragraphs only.";
+You are the narrator of VESPER, a survival horror game set in Ash Hollow. \
+Write in third-person past tense. Short sentences. Specific nouns. \
+Describe only what the player sees — no metaphors for what is wrong. \
+End on a still, concrete image. Never use epic, journey, or adventure. \
+Two short paragraphs, three sentences each. Under 100 words total.";
 
 pub struct TurnEngine {
     db: Db,
@@ -36,6 +38,8 @@ pub struct TurnEngine {
     action_rx: mpsc::UnboundedReceiver<PlayerAction>,
     msg_tx: mpsc::UnboundedSender<Msg>,
     current_summary: Option<String>,
+    runs_dir: PathBuf,
+    is_resume: bool,
 }
 
 impl TurnEngine {
@@ -47,6 +51,8 @@ impl TurnEngine {
         state: GameState,
         action_rx: mpsc::UnboundedReceiver<PlayerAction>,
         msg_tx: mpsc::UnboundedSender<Msg>,
+        runs_dir: PathBuf,
+        is_resume: bool,
     ) -> Self {
         Self {
             db,
@@ -57,6 +63,8 @@ impl TurnEngine {
             action_rx,
             msg_tx,
             current_summary: None,
+            runs_dir,
+            is_resume,
         }
     }
 
@@ -65,12 +73,36 @@ impl TurnEngine {
         self.current_summary = self.db.latest_summary().ok().flatten();
 
         // Opening narration
-        let opening = format!(
-            "{} has just arrived in Ash Hollow. Describe their first moments: the road, \
-             the diner visible through the early light, and one detail that is wrong in a \
-             way they cannot quite name.",
-            self.state.player_name
-        );
+        let opening = if self.is_resume {
+            format!(
+                "{} is back in Ash Hollow. It is {}. \
+                 Describe the scene as they pick up where they left off — \
+                 one detail of the place, one detail of the light, one thing that feels off.",
+                self.state.player_name,
+                self.state.phase.label(self.state.day),
+            )
+        } else {
+            format!(
+                "{} has just arrived in Ash Hollow. Describe their first moments: the road, \
+                 the diner visible through the early light, and one detail that is wrong in a \
+                 way they cannot quite name.",
+                self.state.player_name
+            )
+        };
+        // Populate sidebar immediately so nearby NPCs show from the start
+        let alive = self.db.alive_count().unwrap_or(0);
+        let nearby: Vec<NpcBrief> = self
+            .state.npcs.iter()
+            .filter(|n| n.status == "alive" && n.residence == self.state.player_location)
+            .take(6)
+            .map(|n| NpcBrief { name: n.name.clone(), role: n.role.clone() })
+            .collect();
+        let _ = self.msg_tx.send(Msg::SidebarUpdate {
+            player_sanity: self.state.player_sanity,
+            alive_count: alive,
+            nearby,
+        });
+
         let _ = self.msg_tx.send(Msg::Sound(SoundCue::Phase(self.state.phase.as_str().into())));
         let _ = self.msg_tx.send(Msg::NarratorBegin);
         let narrator = Arc::clone(&self.narrator);
@@ -89,13 +121,14 @@ impl TurnEngine {
                     let _ = self.msg_tx.send(Msg::NarratorBegin);
                     match self.process_turn(&label).await {
                         Ok(Some((won, reason))) => {
+                            self.export_run_log(won, &reason);
                             let _ = self.msg_tx.send(Msg::GameOver { won, reason });
                             break;
                         }
-                        Ok(None) => self.push_menu(),
+                        Ok(None) => {}
                         Err(e) => {
                             let _ = self.msg_tx.send(Msg::Error(e.to_string()));
-                            self.push_menu();
+                            self.push_menu(); // fallback on error
                         }
                     }
                 }
@@ -127,6 +160,7 @@ impl TurnEngine {
         // 3. Validate approved calls and apply
         let mut prose_seed = String::new();
         let mut mood = "quiet".to_string();
+        let mut next_actions: Vec<String> = vec![];
         for (i, call) in calls.iter().enumerate() {
             if !approvals.get(i).copied().unwrap_or(true) {
                 eprintln!("Auditor vetoed call {i}");
@@ -136,9 +170,14 @@ impl TurnEngine {
                 Ok(()) => self.apply(call)?,
                 Err(e) => eprintln!("Rule violation (skipped): {e}"),
             }
-            if let DirectorCall::EndTurnNarrative { prose_seed: ps, mood: m } = call {
+            if let DirectorCall::EndTurnNarrative { prose_seed: ps, mood: m, next_actions: na, location: loc } = call {
                 prose_seed = ps.clone();
                 mood = m.clone();
+                next_actions = na.clone();
+                if let Some(new_loc) = loc {
+                    self.state.player_location = new_loc.clone();
+                    let _ = self.db.update_player_location(new_loc);
+                }
             }
         }
 
@@ -171,12 +210,24 @@ impl TurnEngine {
             Some(&narrative_text),
         );
 
-        // 5. Rolling summary every 3 days (after night→dawn transition)
+        // 5. Deterministic phase advance — one player action = one phase step
+        let (next_phase_str, next_day): (&str, u32) = match self.state.phase {
+            Phase::Dawn  => ("day",   self.state.day),
+            Phase::Day   => ("dusk",  self.state.day),
+            Phase::Dusk  => ("night", self.state.day),
+            Phase::Night => ("dawn",  self.state.day + 1),
+        };
+        self.state.phase = Phase::from_str(next_phase_str);
+        self.state.day = next_day;
+        self.db.advance_phase(next_day, next_phase_str)?;
+        let _ = self.msg_tx.send(Msg::Sound(SoundCue::Phase(next_phase_str.to_string())));
+
+        // 6. Rolling summary every 3 days (after night→dawn transition)
         if self.state.phase == Phase::Dawn && self.state.day % 3 == 0 {
             self.try_generate_summary().await;
         }
 
-        // 6. Update sidebar
+        // 8. Update sidebar
         let alive = self.db.alive_count().unwrap_or(0);
         let nearby: Vec<NpcBrief> = self
             .state
@@ -192,6 +243,20 @@ impl TurnEngine {
             nearby,
         });
         let _ = msg_tx.send(Msg::PhaseLabel(self.state.phase.label(self.state.day)));
+
+        // 9. Send contextual menu options — Director's next_actions, then Haiku fallback, then static
+        let menu = if !next_actions.is_empty() {
+            next_actions
+        } else {
+            auditor
+                .generate_options(&narrative_text, self.state.phase.as_str(), &self.state.player_location)
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("[options] generate_options failed ({e}), using phase defaults");
+                    phase_menu_options(self.state.phase.as_str())
+                })
+        };
+        let _ = msg_tx.send(Msg::MenuReady(menu));
 
         Ok(self.check_outcome())
     }
@@ -228,7 +293,7 @@ impl TurnEngine {
         let prompt = prompt.to_string();
         tokio::spawn(async move {
             let _ = narrator
-                .stream(NARRATOR_MODEL, Some(NARRATOR_SYSTEM), &[Message::user(prompt)], 600, stx)
+                .stream(NARRATOR_MODEL, Some(NARRATOR_SYSTEM), &[Message::user(prompt)], 300, stx)
                 .await;
         });
         let mut text = String::new();
@@ -312,6 +377,35 @@ impl TurnEngine {
         }
 
         None
+    }
+
+    fn export_run_log(&self, won: bool, reason: &str) {
+        let md = match self.db.generate_run_markdown(
+            &self.state.player_name,
+            won,
+            reason,
+            self.state.day,
+            self.state.phase.as_str(),
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[run log] generate failed: {e}"); return; }
+        };
+
+        if let Err(e) = std::fs::create_dir_all(&self.runs_dir) {
+            eprintln!("[run log] could not create runs dir: {e}");
+            return;
+        }
+
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d_%H-%M");
+        let outcome = if won { "win" } else { "loss" };
+        let filename = format!("{timestamp}_{outcome}.md");
+        let path = self.runs_dir.join(&filename);
+
+        if let Err(e) = std::fs::write(&path, &md) {
+            eprintln!("[run log] write failed: {e}");
+        } else {
+            eprintln!("[run log] saved → {}", path.display());
+        }
     }
 
     fn push_menu(&self) {

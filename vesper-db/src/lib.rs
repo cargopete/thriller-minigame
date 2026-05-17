@@ -230,6 +230,15 @@ impl Db {
         Ok(())
     }
 
+    /// Update the player's current location.
+    pub fn update_player_location(&self, location: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE player SET location = ?1 WHERE id = 1",
+            params![location],
+        )?;
+        Ok(())
+    }
+
     /// Apply stat deltas to an NPC, clamped to 0–100.
     pub fn apply_npc_delta(&self, id: &str, sanity_delta: i32, trust_delta: i32) -> Result<()> {
         self.conn.execute(
@@ -309,5 +318,114 @@ impl Db {
         self.conn
             .execute_batch("DELETE FROM npc; DELETE FROM player; DELETE FROM save;")?;
         Ok(())
+    }
+
+    /// Build a markdown run log from the current save.
+    /// Call this immediately before or after the game ends.
+    pub fn generate_run_markdown(
+        &self,
+        player_name: &str,
+        won: bool,
+        reason: &str,
+        final_day: u32,
+        final_phase: &str,
+    ) -> Result<String> {
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
+        let outcome_label = if won { "WIN" } else { "LOSS" };
+
+        // Dead NPCs
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM npc WHERE status = 'dead' ORDER BY name",
+        )?;
+        let dead: Vec<String> = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Rememberer status
+        let mut stmt = self.conn.prepare(
+            "SELECT name, status, fragments_collected FROM npc \
+             WHERE id IN ('iris_calloway','wren_adisa') ORDER BY id",
+        )?;
+        struct Rem { name: String, status: String, frags: i32 }
+        let rememberers: Vec<Rem> = stmt
+            .query_map([], |r| Ok(Rem {
+                name:   r.get(0)?,
+                status: r.get(1)?,
+                frags:  r.get(2)?,
+            }))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let events = self.event_log_since(0)?;
+
+        let mut md = String::new();
+
+        // ── Header ────────────────────────────────────────────────────────────
+        md.push_str("# VESPER — Run Log\n\n");
+        md.push_str(&format!("**Player:** {player_name}  \n"));
+        md.push_str(&format!("**Date:** {now}  \n"));
+        md.push_str(&format!("**Outcome:** {outcome_label} — {reason}  \n"));
+        md.push_str(&format!("**Final position:** Day {final_day}, {final_phase}  \n"));
+        md.push_str("\n---\n\n");
+
+        // ── Rememberers ───────────────────────────────────────────────────────
+        md.push_str("## Rememberers\n\n");
+        md.push_str("| Name | Fragments | Status |\n");
+        md.push_str("|------|-----------|--------|\n");
+        for r in &rememberers {
+            md.push_str(&format!("| {} | {}/7 | {} |\n", r.name, r.frags, r.status));
+        }
+        md.push_str("\n---\n\n");
+
+        // ── Deaths ────────────────────────────────────────────────────────────
+        if dead.is_empty() {
+            md.push_str("## Deaths\n\nNone.\n\n");
+        } else {
+            md.push_str(&format!("## Deaths ({} / 55)\n\n", dead.len()));
+            for name in &dead {
+                md.push_str(&format!("- {name}\n"));
+            }
+            md.push_str("\n");
+        }
+        md.push_str("---\n\n");
+
+        // ── Turn log ──────────────────────────────────────────────────────────
+        md.push_str("## Turn Log\n\n");
+
+        let mut last_header = String::new();
+        for ev in &events {
+            let header = format!("Day {} — {}", ev.day, capitalise(&ev.phase));
+            if header != last_header {
+                if !last_header.is_empty() {
+                    md.push_str("\n---\n\n");
+                }
+                md.push_str(&format!("### {header}\n\n"));
+                last_header = header;
+            }
+
+            // Extract player action from payload JSON if present
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev.payload_json) {
+                if let Some(action) = v["action"].as_str() {
+                    md.push_str(&format!("**Action:** {action}\n\n"));
+                }
+            }
+
+            if let Some(prose) = &ev.narrative_md {
+                let prose = prose.trim();
+                if !prose.is_empty() {
+                    md.push_str(prose);
+                    md.push_str("\n\n");
+                }
+            }
+        }
+
+        Ok(md)
+    }
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
 }

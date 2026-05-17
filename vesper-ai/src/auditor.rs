@@ -4,6 +4,8 @@ use serde::Deserialize;
 use serde_json::json;
 use vesper_core::{events::DirectorCall, state::GameState};
 
+use crate::auth::Auth;
+
 const AUDITOR_MODEL: &str = "claude-haiku-4-5-20251001";
 
 const AUDITOR_SYSTEM: &str = "\
@@ -15,8 +17,7 @@ Return ONLY valid JSON on a single line: {\"vetoed\":[<0-based indices>]}\n\
 VETO a call if:\n\
 - kill_npc appears more than twice in one turn\n\
 - npc_action targets an NPC who is also being killed this same turn\n\
-- end_turn_narrative is absent or appears more than once\n\
-- advance_phase is absent, appears more than once, or is not the final call\n\
+- end_turn_narrative appears more than once\n\
 - prose_seed in end_turn_narrative hints at a Rememberer identity or special status\n\
 - Any action targets an NPC listed as dead in the state\n\
 - grant_fragment targets anyone other than iris_calloway or wren_adisa\n\
@@ -34,7 +35,7 @@ Never name or hint at the two Rememberers.";
 
 pub struct AuditorClient {
     http: Client,
-    api_key: String,
+    auth: Auth,
 }
 
 #[derive(Deserialize)]
@@ -56,8 +57,8 @@ struct VetoResult {
 }
 
 impl AuditorClient {
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), api_key: api_key.into() }
+    pub fn new(auth: Auth) -> Self {
+        Self { http: Client::new(), auth }
     }
 
     /// Review proposed Director calls. Returns a bool per call: true = approved.
@@ -81,15 +82,22 @@ impl AuditorClient {
             "messages": [{"role": "user", "content": user_msg}]
         });
 
-        let resp = self
-            .http
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let mut delay_ms = 2_000u64;
+        let resp = loop {
+            let r = self.auth
+                .apply(self.http.post("https://api.anthropic.com/v1/messages"))
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+            if r.status().as_u16() != 429 || delay_ms > 16_000 {
+                break r;
+            }
+            eprintln!("[auditor] rate limited, retrying in {delay_ms}ms…");
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            delay_ms *= 2;
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -119,6 +127,58 @@ impl AuditorClient {
         Ok(approvals)
     }
 
+    /// Generate contextual player options from the current narrative scene.
+    /// Used as a fallback when the Director doesn't provide next_actions.
+    pub async fn generate_options(
+        &self,
+        narrative: &str,
+        phase: &str,
+        location: &str,
+    ) -> Result<Vec<String>> {
+        let prompt = format!(
+            "Survival horror game, scene:\n{narrative}\n\nPhase: {phase}. Location: {location}.\n\n\
+             List 4 specific actions the player can take right now. \
+             Return ONLY a JSON array, e.g.: [\"Check the back door\",\"Talk to her\",\"Search the shelves\",\"Leave\"]"
+        );
+
+        let body = json!({
+            "model": AUDITOR_MODEL,
+            "max_tokens": 150,
+            "messages": [{"role": "user", "content": prompt}]
+        });
+
+        let resp = self.auth
+            .apply(self.http.post("https://api.anthropic.com/v1/messages"))
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("generate_options API {}", resp.status());
+        }
+
+        let api_resp: TextResponse = resp.json().await?;
+        let text = api_resp
+            .content
+            .into_iter()
+            .find(|b| b.kind == "text")
+            .map(|b| b.text)
+            .unwrap_or_default();
+
+        // Extract JSON array from response
+        let t = text.trim();
+        if let (Some(s), Some(e)) = (t.find('['), t.rfind(']')) {
+            if let Ok(actions) = serde_json::from_str::<Vec<String>>(&t[s..=e]) {
+                if !actions.is_empty() {
+                    return Ok(actions);
+                }
+            }
+        }
+        anyhow::bail!("could not parse options from: {t}")
+    }
+
     /// Summarise recent events into a rolling paragraph.
     pub async fn summarise(
         &self,
@@ -138,15 +198,22 @@ impl AuditorClient {
             "messages": [{"role": "user", "content": user_msg}]
         });
 
-        let resp = self
-            .http
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let mut delay_ms = 2_000u64;
+        let resp = loop {
+            let r = self.auth
+                .apply(self.http.post("https://api.anthropic.com/v1/messages"))
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+            if r.status().as_u16() != 429 || delay_ms > 16_000 {
+                break r;
+            }
+            eprintln!("[summarise] rate limited, retrying in {delay_ms}ms…");
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            delay_ms *= 2;
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -183,7 +250,7 @@ fn describe_calls(calls: &[DirectorCall]) -> String {
                 format!("{i}: kill_npc(npc={npc_id}, cause={cause}, witnesses=[{}])",
                     witness_ids.join(","))
             }
-            DirectorCall::EndTurnNarrative { prose_seed, mood } => {
+            DirectorCall::EndTurnNarrative { prose_seed, mood, .. } => {
                 format!("{i}: end_turn_narrative(mood={mood}, prose_seed={prose_seed:?})")
             }
             DirectorCall::GrantFragment { npc_id, location, description } => {

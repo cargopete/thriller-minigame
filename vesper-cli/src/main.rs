@@ -5,7 +5,7 @@ use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
 use directories::ProjectDirs;
 use tokio::sync::mpsc;
 
-use vesper_ai::{auditor::AuditorClient, client::AnthropicClient, director::DirectorClient};
+use vesper_ai::{auth::Auth, auditor::AuditorClient, client::AnthropicClient, director::DirectorClient};
 use vesper_core::state::{GameState, NpcState, Phase};
 use vesper_db::{Db, Player};
 use vesper_ui::app::{App, Msg, PlayerAction};
@@ -15,12 +15,12 @@ use turn::TurnEngine;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .context("ANTHROPIC_API_KEY not set")?;
+    let auth = Auth::resolve()
+        .context("No authentication found. Set ANTHROPIC_API_KEY or sign in with Claude Code.")?;
 
     print_title();
-    let db = open_db()?;
-    let player = resolve_player(&db)?;
+    let (db, data_dir) = open_db()?;
+    let (player, is_resume) = resolve_player(&db)?;
 
     // Build GameState from DB
     let (day, phase_str) = db.get_save()?;
@@ -54,11 +54,12 @@ async fn main() -> Result<()> {
     let (msg_tx, msg_rx) = mpsc::unbounded_channel::<Msg>();
     let (action_tx, action_rx) = mpsc::unbounded_channel::<PlayerAction>();
 
-    let director = Arc::new(DirectorClient::new(&api_key));
-    let auditor  = Arc::new(AuditorClient::new(&api_key));
-    let narrator = Arc::new(AnthropicClient::new(api_key));
+    let director = Arc::new(DirectorClient::new(auth.clone()));
+    let auditor  = Arc::new(AuditorClient::new(auth.clone()));
+    let narrator = Arc::new(AnthropicClient::new(auth));
 
-    let engine = TurnEngine::new(db, director, auditor, narrator, state, action_rx, msg_tx);
+    let runs_dir = data_dir.join("runs");
+    let engine = TurnEngine::new(db, director, auditor, narrator, state, action_rx, msg_tx, runs_dir, is_resume);
     tokio::spawn(async move { engine.run().await });
 
     let mut terminal = ratatui::init();
@@ -82,15 +83,16 @@ fn print_title() {
     println!();
 }
 
-fn open_db() -> Result<Db> {
+fn open_db() -> Result<(Db, std::path::PathBuf)> {
     let dirs = ProjectDirs::from("", "", "vesper")
         .context("cannot determine data directory")?;
-    let data = dirs.data_dir();
-    std::fs::create_dir_all(data)?;
-    Db::open(&data.join("vesper.db"))
+    let data = dirs.data_dir().to_path_buf();
+    std::fs::create_dir_all(&data)?;
+    let db = Db::open(&data.join("vesper.db"))?;
+    Ok((db, data))
 }
 
-fn resolve_player(db: &Db) -> Result<Player> {
+fn resolve_player(db: &Db) -> Result<(Player, bool)> {
     if db.has_save()? {
         let player = db.load_player()?;
         println!("\n VESPER\n");
@@ -99,11 +101,11 @@ fn resolve_player(db: &Db) -> Result<Player> {
             .default(true)
             .interact()?;
         if resume {
-            return Ok(player);
+            return Ok((player, true));
         }
         db.wipe()?;
     }
-    run_wizard(db)
+    Ok((run_wizard(db)?, false))
 }
 
 fn run_wizard(db: &Db) -> Result<Player> {

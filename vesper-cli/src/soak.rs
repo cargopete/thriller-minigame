@@ -13,7 +13,7 @@ use std::{
 
 use anyhow::Result;
 use tokio::sync::Semaphore;
-use vesper_ai::{auditor::AuditorClient, director::DirectorClient};
+use vesper_ai::{auth::Auth, auditor::AuditorClient, director::DirectorClient};
 use vesper_core::{
     events::DirectorCall,
     rules,
@@ -387,8 +387,8 @@ fn print_summary(results: &[RunResult]) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .expect("ANTHROPIC_API_KEY not set");
+    let auth = Auth::resolve()
+        .expect("No authentication found. Set ANTHROPIC_API_KEY or sign in with Claude Code.");
 
     let mut args = std::env::args().skip(1);
     let n:           usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(5);
@@ -399,8 +399,8 @@ async fn main() -> Result<()> {
     println!();
 
     // Shared clients — reqwest::Client is arc-internally, safe to clone across tasks
-    let director = Arc::new(DirectorClient::new(&api_key));
-    let auditor  = Arc::new(AuditorClient::new(&api_key));
+    let director = Arc::new(DirectorClient::new(auth.clone()));
+    let auditor  = Arc::new(AuditorClient::new(auth));
     let sem      = Arc::new(Semaphore::new(concurrency));
 
     let mut tasks = tokio::task::JoinSet::new();

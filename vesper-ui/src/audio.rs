@@ -196,6 +196,15 @@ impl SoundEngine {
         Some(Self { _stream: stream, _handle: handle, ambient, fx })
     }
 
+    pub fn mute(&self) {
+        self.ambient.pause();
+        self.fx.pause();
+    }
+
+    pub fn unmute(&self) {
+        self.ambient.play();
+    }
+
     pub fn play(&self, cue: SoundCue) {
         match cue {
             SoundCue::Phase(phase) => {

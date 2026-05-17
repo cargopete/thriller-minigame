@@ -2,6 +2,7 @@
 name = "vesper-cli"
 version = "0.1.0"
 edition = "2021"
+default-run = "vesper"
 
 [[bin]]
 name = "vesper"
@@ -12,12 +13,13 @@ name = "soak"
 path = "src/soak.rs"
 
 [dependencies]
-vesper-core = { path = "../vesper-core" }
-vesper-ai  = { path = "../vesper-ai" }
-vesper-db  = { path = "../vesper-db" }
-vesper-ui  = { path = "../vesper-ui" }
-ratatui    = { workspace = true }
-tokio      = { workspace = true }
-anyhow     = { workspace = true }
-dialoguer  = { workspace = true }
-directories = { workspace = true }
+vesper-core  = { path = "../vesper-core" }
+vesper-ai    = { path = "../vesper-ai" }
+vesper-db    = { path = "../vesper-db" }
+vesper-ui    = { path = "../vesper-ui" }
+ratatui      = { workspace = true }
+tokio        = { workspace = true }
+anyhow       = { workspace = true }
+dialoguer    = { workspace = true }
+directories  = { workspace = true }
+chrono       = { workspace = true }

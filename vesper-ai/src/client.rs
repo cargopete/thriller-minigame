@@ -5,6 +5,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::auth::Auth;
+
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
@@ -57,12 +59,12 @@ struct TextDelta {
 
 pub struct AnthropicClient {
     http: Client,
-    api_key: String,
+    auth: Auth,
 }
 
 impl AnthropicClient {
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), api_key: api_key.into() }
+    pub fn new(auth: Auth) -> Self {
+        Self { http: Client::new(), auth }
     }
 
     /// Stream a message from the API. Sends `StreamEvent`s on `tx` until `Done` or `Error`.
@@ -76,15 +78,22 @@ impl AnthropicClient {
     ) -> Result<()> {
         let body = Request { model, max_tokens, messages, stream: true, system };
 
-        let response = self
-            .http
-            .post(API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let mut delay_ms = 2_000u64;
+        let response = loop {
+            let r = self.auth
+                .apply(self.http.post(API_URL))
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+            if r.status().as_u16() != 429 || delay_ms > 16_000 {
+                break r;
+            }
+            eprintln!("[narrator] rate limited, retrying in {delay_ms}ms…");
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            delay_ms *= 2;
+        };
 
         if !response.status().is_success() {
             let status = response.status();
