@@ -25,6 +25,7 @@ pub enum DirectorCall {
         mood: String,
         next_actions: Vec<String>,
         location: Option<String>,
+        player_sanity_delta: i32,
     },
     GrantFragment {
         npc_id: String,

@@ -20,14 +20,35 @@ const REMEMBERER_IDS: [&str; 2] = ["iris_calloway", "wren_adisa"];
 const FRAGMENTS_NEEDED: i32 = 7;
 
 const DIRECTOR_MODEL: &str = "claude-sonnet-4-6";
-const NARRATOR_MODEL: &str = "claude-sonnet-4-6";
+const FINALE_MODEL: &str = "claude-opus-4-7";
+
+fn narrator_model(day: u32) -> &'static str {
+    if day >= 17 { FINALE_MODEL } else { "claude-sonnet-4-6" }
+}
 
 const NARRATOR_SYSTEM: &str = "\
-You are the narrator of VESPER, a survival horror game set in Ash Hollow. \
-Write in third-person past tense. Short sentences. Specific nouns. \
-Describe only what the player sees — no metaphors for what is wrong. \
-End on a still, concrete image. Never use epic, journey, or adventure. \
-Two short paragraphs, three sentences each. Under 100 words total.";
+You are the Narrator of VESPER, a survival horror game set in Ash Hollow.\n\
+\n\
+VOICE\n\
+Third-person past tense. Short, declarative sentences. Specific nouns over adjectives. \
+Describe only what the player could see, hear, or smell — never interiority unless it \
+arrives as a physical sensation. End every scene on a still, concrete image. \
+Never use the words epic, journey, adventure, destiny, or chosen.\n\
+\n\
+LENGTH\n\
+Two paragraphs. First (3-4 sentences) sets the scene. \
+Second (2-3 sentences) lands one quiet human detail. 120-180 words total.\n\
+\n\
+ATMOSPHERE\n\
+The dread lives in the ordinary: a cold cup of coffee, a door left ajar, \
+the way someone laughs a half-beat too quickly. Earn the horror — never announce it. \
+When cicadas go silent, name the silence. When the iron bell rings at dusk, end on it.\n\
+\n\
+HARD RULES\n\
+- The player character's name must appear at least once.\n\
+- Never hint at any character's hidden identity or special status.\n\
+- Never use the words Rememberer, fragment, or memory fragment.\n\
+- Never write player choices or next actions.";
 
 pub struct TurnEngine {
     db: Db,
@@ -107,7 +128,7 @@ impl TurnEngine {
         let _ = self.msg_tx.send(Msg::NarratorBegin);
         let narrator = Arc::clone(&self.narrator);
         let msg_tx = self.msg_tx.clone();
-        if let Err(e) = Self::narrate_with(narrator, msg_tx, &opening).await.map(|_| ()) {
+        if let Err(e) = Self::narrate_with(narrator, msg_tx, narrator_model(self.state.day), &opening).await.map(|_| ()) {
             let _ = self.msg_tx.send(Msg::Error(e.to_string()));
         }
         self.push_menu();
@@ -161,6 +182,7 @@ impl TurnEngine {
         let mut prose_seed = String::new();
         let mut mood = "quiet".to_string();
         let mut next_actions: Vec<String> = vec![];
+        let mut player_sanity_delta: i32 = 0;
         for (i, call) in calls.iter().enumerate() {
             if !approvals.get(i).copied().unwrap_or(true) {
                 eprintln!("Auditor vetoed call {i}");
@@ -170,10 +192,11 @@ impl TurnEngine {
                 Ok(()) => self.apply(call)?,
                 Err(e) => eprintln!("Rule violation (skipped): {e}"),
             }
-            if let DirectorCall::EndTurnNarrative { prose_seed: ps, mood: m, next_actions: na, location: loc } = call {
+            if let DirectorCall::EndTurnNarrative { prose_seed: ps, mood: m, next_actions: na, location: loc, player_sanity_delta: psd } = call {
                 prose_seed = ps.clone();
                 mood = m.clone();
                 next_actions = na.clone();
+                player_sanity_delta = *psd;
                 if let Some(new_loc) = loc {
                     self.state.player_location = new_loc.clone();
                     let _ = self.db.update_player_location(new_loc);
@@ -181,19 +204,28 @@ impl TurnEngine {
             }
         }
 
+        // Apply player sanity delta
+        if player_sanity_delta != 0 {
+            match self.db.apply_player_sanity_delta(player_sanity_delta) {
+                Ok(new_sanity) => self.state.player_sanity = new_sanity,
+                Err(e) => eprintln!("[sanity] apply delta failed: {e}"),
+            }
+        }
+
         // 4. Narrator writes the scene
+        let player = &self.state.player_name;
         let prompt = if prose_seed.is_empty() {
             format!(
-                "Day {}, {}. The player chose: {}. Describe what happens.",
+                "Player name: {player}. Day {}, {}. They chose: {}. Describe what happens.",
                 self.state.day, self.state.phase.as_str(), player_action
             )
         } else {
             format!(
-                "Day {}, {}. Mood: {}. {}  Player action: {}.",
+                "Player name: {player}. Day {}, {}. Mood: {}. {}  Player action: {}.",
                 self.state.day, self.state.phase.as_str(), mood, prose_seed, player_action
             )
         };
-        let narrative_text = Self::narrate_with(narrator, msg_tx.clone(), &prompt).await?;
+        let narrative_text = Self::narrate_with(narrator, msg_tx.clone(), narrator_model(self.state.day), &prompt).await?;
 
         // Log the turn with narrative text
         let payload = format!(
@@ -287,13 +319,14 @@ impl TurnEngine {
     async fn narrate_with(
         narrator: Arc<AnthropicClient>,
         msg_tx: mpsc::UnboundedSender<Msg>,
+        model: &'static str,
         prompt: &str,
     ) -> Result<String> {
         let (stx, mut srx) = mpsc::unbounded_channel::<StreamEvent>();
         let prompt = prompt.to_string();
         tokio::spawn(async move {
             let _ = narrator
-                .stream(NARRATOR_MODEL, Some(NARRATOR_SYSTEM), &[Message::user(prompt)], 300, stx)
+                .stream(model, Some(NARRATOR_SYSTEM), &[Message::user(prompt)], 1000, stx)
                 .await;
         });
         let mut text = String::new();
@@ -354,9 +387,11 @@ impl TurnEngine {
             .filter(|n| REMEMBERER_IDS.contains(&n.id.as_str()))
             .collect();
 
-        // Win: both alive with enough fragments
+        // Win: both Rememberers alive with enough fragments, community still standing
+        let alive_count = self.state.npcs.iter().filter(|n| n.status == "alive").count();
         if rememberers.len() == 2
             && rememberers.iter().all(|n| n.status == "alive" && n.fragments >= FRAGMENTS_NEEDED)
+            && alive_count >= 25
         {
             return Some((
                 true,
@@ -367,6 +402,16 @@ impl TurnEngine {
         // Lose: a Rememberer died
         if let Some(dead) = rememberers.iter().find(|n| n.status != "alive") {
             return Some((false, format!("{} did not survive.", dead.name)));
+        }
+
+        // Lose: player sanity gone
+        if self.state.player_sanity <= 0 {
+            return Some((false, "Ash Hollow took what was left of you. You are still here.".into()));
+        }
+
+        // Lose: community collapsed (hard threshold)
+        if alive_count < 12 {
+            return Some((false, format!("The community broke. {alive_count} people remained — not enough.")));
         }
 
         // Lose: time ran out (past Day 17 night)

@@ -77,6 +77,12 @@ fn tool_schemas() -> Value {
                     "location": {
                         "type": "string",
                         "description": "Where the player is now (e.g. 'diner', 'town_square', 'church', 'residential', 'road'). Set this whenever the player moves."
+                    },
+                    "player_sanity_delta": {
+                        "type": "integer",
+                        "minimum": -20,
+                        "maximum": 5,
+                        "description": "How much the player's sanity changes this turn. Use negative values for horror witnessed, NPC death, betrayal (-5 to -20). Use small positive values only for genuine human connection (+1 to +5). Omit or use 0 for neutral turns."
                     }
                 },
                 "required": ["prose_seed","mood","next_actions"],
@@ -238,6 +244,8 @@ fn parse_tool_call(name: &str, input: Value) -> Option<DirectorCall> {
                 next_actions: Vec<String>,
                 #[serde(default)]
                 location: Option<String>,
+                #[serde(default)]
+                player_sanity_delta: i32,
             }
             let i: I = serde_json::from_value(input).ok()?;
             Some(DirectorCall::EndTurnNarrative {
@@ -245,6 +253,7 @@ fn parse_tool_call(name: &str, input: Value) -> Option<DirectorCall> {
                 mood: i.mood,
                 next_actions: i.next_actions,
                 location: i.location,
+                player_sanity_delta: i.player_sanity_delta,
             })
         }
         "grant_fragment" => {

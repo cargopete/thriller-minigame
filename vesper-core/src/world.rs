@@ -1,99 +1,128 @@
-/// Static world description — cached in the Director's system prompt at 1-hour TTL.
-/// Deliberately omits is_rememberer status. Kept above ~1 000 tokens to clear
-/// Anthropic's prompt-caching threshold with the rest of the system message.
+/// Static world description — cached in the Director's system prompt.
+/// Omits is_rememberer status entirely. Matches the seeded NPC roster.
 pub const WORLD_BIBLE: &str = "\
 ASH HOLLOW — WORLD BIBLE\n\
 \n\
 THE SETTING\n\
 Ash Hollow is a small valley town in rural America. One road in, no road out. The forest \
-begins at the edge of town and does not end at any known distance. Mobile phones receive no \
-signal. Vehicles that drive away do not return. People who walk into the forest at night do \
-not return. People who walk into the forest in daylight disappear after a few hundred feet \
-and are sometimes found, later, near where they started.\n\
+begins at the edge of town and does not end at any known distance. Phones receive no signal. \
+Vehicles that drive away do not return. Walkers who enter the forest at night do not return; \
+those who enter by day lose their direction and circle back.\n\
 \n\
-Time has not stopped — days pass, hunger advances, children cry — but time feels wrong. \
-Some residents have been here for years. None of them remember the exact day they arrived.\n\
+Time has not stopped — days pass, hunger advances — but time feels wrong. Some residents \
+have been here for years. None of them remember the exact day they arrived.\n\
 \n\
 THE TWO SETTLEMENTS\n\
 \n\
-The Town: a gas station, Farrell's diner, St. Brendan's church, a hardware store, a walk-in \
-medical clinic (no surgeon), a community hall used for rationing and meetings, and residential \
-streets. Approximately 35 adults and 4 children.\n\
+The Town: Tian-Lan's diner (community centre, news, breakfast), St. Helen's church \
+(Father Idris Patel), the Sheriff's Office (Lloyd Becker; iron bell on the porch, rung at dusk), \
+a hardware store, a walk-in clinic (Dr Mara Aoki), and residential streets. ~35 adults and \
+children. Town leader: Lloyd Becker by weight of competence, not election.\n\
 \n\
-The Colony House: a large farmhouse on the valley's eastern ridge. A group arrived before \
-the town cohered and claimed it. Better water, worse food. Approximately 20 adults. \
-Their leader, Petra Voss, is organised and suspicious of the town. Not hostile. Waiting.\n\
+The Magdalene: a three-storey roadside lodge on the eastern ridge. Led by Maria Vance (ex-EMT; \
+organised; negotiates; does not fully trust the town). Looser talisman discipline than the town. \
+~20 residents including Hollis Bray (mechanic, volatile), Old Ren (oldest resident, speaks in \
+fragments), Fatou N'Diaye (pregnant; pregnancy progressing impossibly fast), \
+Nora Pell (recordings her dreams; sounds from before she arrived), Wren Adisa (violinist; \
+knows a song they swear they invented), and others.\n\
 \n\
 THE NIGHTS\n\
-After dark, creatures move outside. No survivor has seen one clearly. What is known: \
-they break bones, displace limbs, and make sounds that belong to nothing living. They cannot \
-enter a properly sealed building — but the definition of 'properly sealed' has killed several \
-people who were certain they understood it. They are drawn to light, movement, and sound. \
-A creature can be driven off, rarely killed. Killing one does not make the others retreat.\n\
+After dark, creatures move outside. They look human from behind. They knock on doors. They use \
+the voices of people who died here. They cannot enter a properly sealed building — but the \
+definition of 'properly sealed' has killed several people who were certain they understood it. \
+They are drawn to light, sound, and movement. A creature can be driven off; killing one does \
+not make the others retreat. They are not mindless. They remember names.\n\
+\n\
+TALISMANS\n\
+Rune-carved stone disks hung in doorways. A house with an intact talisman on every entry is \
+as safe as Ash Hollow offers. A broken or missing talisman is an open invitation. Yusra Khan \
+crafts replacements; supply is finite.\n\
 \n\
 THE VOICES\n\
-Some residents hear voices. Specific instructions. Names of people. Descriptions of places. \
-The instructions are not always wrong. Following them too completely ends badly. The voices \
-know more than is possible and less than would be useful. Their source is unknown.\n\
+Some residents hear voices. Specific instructions. Names. Descriptions of places. The \
+instructions are not always wrong. Following them too completely ends badly. The voices know \
+more than is possible and less than would be useful. The Stranger — a figure seen at the \
+forest edge, speaking to selected residents — may be their instrument or their victim. \
+Nobody is certain which.\n\
 \n\
-RESOURCES (Day 1 baseline)\n\
-Food: community stores in the hall, rationed daily. ~20 days at current consumption. \
-Colony house has ~8 days independently.\n\
-Medicine: the clinic has antibiotics, bandages, painkillers, two doses of morphine. No IV. \
-No surgical capability.\n\
-Fuel: diesel generator at the colony house powers one building. ~10 nights of fuel remain. \
-The town relies on candles, oil lamps, and a fireplace in the hall.\n\
-Weapons: three hunting rifles in the town (one with Lloyd Becker, one in the hardware store, \
-one unaccounted for since an early incident), one shotgun at the colony house with Petra Voss, \
-hunting knives throughout.\n\
+KEY FIGURES (Town)\n\
+Lloyd Becker, 54 — de facto sheriff. Former MP. Pragmatic to the point of cruelty when \
+necessary. Carries a weight no one discusses. Drinks lukewarm coffee. Talks to a dead \
+chaplain in his head.\n\
+Father Idris Patel, 51 — priest at St. Helen's. Believes the town is part of a larger \
+pattern. Buried a bag in the woods on arrival: a bottle, a child's shoe. Has not gone back.\n\
+Dr Mara Aoki, 36 — runs the clinic. Calm. Engaged to Nessa Whitcomb (nurse, bus arrival). \
+Running out of supplies and, privately, hope.\n\
+Deputy Han Lee, 28 — loyal, eager; son of Tian-Lan Chen (she has not told him). In love \
+with Mara Aoki. Learning the job faster than he wanted to.\n\
+Tian-Lan Chen, 62 — runs the diner with her husband Bing (68, early dementia). Feeds \
+everyone. Does not panic. The diner is her cathedral.\n\
+Bram Mathers, 44 — father, ex-engineer. Maps the woods on graph paper; the maps don't match \
+day to day. His wife Cora hums a tune she doesn't know she knows. Their son Theo (8) sees a \
+boy no one else sees; Lily Mathers (16) writes letters to a boy who doesn't exist.\n\
+Iris Calloway, 31 — bookkeeper, bus arrival. Hums a violin lullaby in her sleep. Flinches at \
+bottle trees without knowing why. Drawn to objects with numbers on them.\n\
 \n\
-KEY FIGURES\n\
+KEY FIGURES (The Magdalene)\n\
+Maria Vance, 49 — colony leader, ex-EMT. Smiles a lot. Sleeps three hours a night. Her \
+sister was the first death here.\n\
+Old Ren, ~70 — has been here longer than any other resident. Speaks in fragments. Knows a \
+song he will not sing. Looks away from the bottle tree. His mind is that of a nine-year-old \
+who witnessed something that could not be processed and stopped aging there. His hints are \
+60–70% accurate, 20% misleading, 10% true but too late.\n\
+Hollis Bray, 41 — mechanic, volatile. Carries a wrench like a rosary. Thinks the town is \
+punishment for something he did in 1998. Useful when calm; dangerous when not.\n\
+Ezra Stone, 22 — tattoo artist. Draws the same symbol in charcoal over and over. Does not \
+know he is Becker's estranged son; neither does Becker. Not openly.\n\
+Fatou N'Diaye, 26 — pregnant; the pregnancy is progressing faster than biology allows. \
+Sissel Hagen (30, doula) is central to her arc. Always hungry.\n\
 \n\
-Town:\n\
-Lloyd Becker — former mechanic, de facto town leader. Pragmatic to the point of cruelty \
-when necessary. Father of two; his wife was taken on Night 4 before the player arrived.\n\
-Father Donal Creighton — priest at St. Brendan's. Provides comfort; hides growing doubt \
-under ritual. The church is the safest-feeling building in town, which is not the same as safe.\n\
-Nadia Osei — former nurse, runs the clinic. Most respected person in town. Stretched thin. \
-Knows more about who is deteriorating than she says.\n\
+THE 17-DAY SEVERITY ARC\n\
+Days 1–4: Severity LOW. Shock has passed. People function but are frightened. Early deaths \
+are possible; they are not expected. One monster knock, no entry. Player learns rules.\n\
+Days 5–8: Severity MEDIUM. Rationing creates tension. Colony relationship deteriorates or \
+stabilises. First voices-arc event. First possible NPC death (low-trust, isolated).\n\
+Days 9–12: Severity HIGH. Mid-game crisis. Cicadas appear (Day 9–10). At least one major \
+faction event — betrayal, expulsion, or open conflict. Voices followers make visible moves. \
+The pregnancy escalates. Multiple deaths plausible.\n\
+Days 13–16: Severity CRITICAL. Collapse phase. Multiple deaths expected. Old Ren's hints \
+become more urgent and less decipherable. The Stranger moves closer.\n\
+Day 17: RESOLUTION. The pattern either breaks or it does not. Both specific residents must \
+reach a specific state — the Director must never name or hint who they are. Most \
+playthroughs end here without the win condition.\n\
 \n\
-Colony House:\n\
-Petra Voss — organised, calm, former schoolteacher. Made hard decisions in the early days \
-that no one discusses. Distrusts the town but will negotiate.\n\
-Marcus Voss — Petra's husband. Quieter, more frightened. Sometimes heard talking to himself.\n\
+THE WIN CONDITION (Director must work toward this without revealing it)\n\
+Two specific long-term residents — their identities never stated in any narration — must each \
+reach a state of recovered memory (fragments_collected >= 7) while remaining alive, and \
+the community must not have collapsed (total alive NPCs >= 25). Fragments arrive through: \
+dreams, music, the bottle tree, encounters with the children, Old Ren's slips, mirrors, \
+Faraway visions. The player must protect these two without knowing who they are. \
+Grant fragments organically — solitude, unusual locations, player-facilitated moments.\n\
 \n\
-Voices followers (fluid):\n\
-Old Ren Whitaker — has been here longer than anyone else. Appears unconcerned about dying. \
-The voices do not seem to trouble him — he seems to be listening for something else entirely.\n\
-Hazel Fenn — former graduate student. Has followed two voice instructions that proved correct. \
-Becoming a true believer. This will end badly.\n\
-Emil Dracho — middle-aged, quiet. May or may not hear voices. Behaves as if he does.\n\
+LOCATIONS\n\
+Tian-Lan's Diner — community centre. Most day-action starts here.\n\
+Sheriff's Office — Becker's HQ. Iron bell on porch, rung at dusk.\n\
+St. Helen's Church — Father Patel's. Graveyard adjacent. Cellar beneath.\n\
+The Magdalene — three-storey lodge on the eastern ridge. Maria Vance.\n\
+The Bottle Tree — gnarled oak two hours north; glass bottles etched with numbers. Transports.\n\
+The Lighthouse — reached via the bottle tree. Stairs, woodsmoke, toys on the steps.\n\
+The Standing Stones — inside a triangle of crumbled towers. Tunnels beneath.\n\
+The Forest — surrounds everything; walking straight returns you to where you started.\n\
 \n\
-The Mathers family — Cora and her adult children Bram and Theo — have partially withdrawn \
-from community life. Cora believes the valley has a logic that can be learned. She is not \
-entirely wrong about there being a logic. She is mostly wrong about which part she has learned.\n\
-\n\
-The Stranger — a figure seen occasionally at the forest edge. Has not spoken. Has not attacked. \
-Three separate witnesses gave three inconsistent descriptions. The town has decided collectively \
-not to discuss this.\n\
-\n\
-THE 17-DAY ARC\n\
-Days 1–4: Orientation. Shock has passed. People are frightened but functional. Early \
-casualties are possible; they are not expected.\n\
-Days 5–8: First fractures. Rationing creates tension. The colony house relationship \
-deteriorates or stabilises. First voices-arc event probable.\n\
-Days 9–12: Mid-game crisis. At least one major faction event — betrayal, expulsion, or \
-open conflict. Voices followers begin making visible moves.\n\
-Days 13–16: Collapse. Multiple deaths expected. The structures built in the first week \
-are tested to destruction.\n\
-Day 17: Resolution. The pattern either breaks or it does not. The win condition involves \
-two specific residents reaching a specific state — the Director must never name or hint at \
-who they are; it must emerge through play. Most playthroughs do not reach the win condition.\n\
+HARD RULES FOR THE DIRECTOR\n\
+- Monsters can only kill at night or through specific arc causes (voices_arc, faction_war).\n\
+- Dead NPCs stay dead.\n\
+- The word 'Rememberer' must never appear in any prose seed.\n\
+- The identities of the two hidden rememberers must never be hinted at.\n\
+- Old Ren's hints arrive via npc_action with action_type=reveal_secret; make them oblique.\n\
+- Escalate severity proportionally to the current day.\n\
+- Player sanity decreases for horror witnessed (monster contact, death, betrayal: -5 to -20) \
+  and very rarely increases for genuine human connection (+1 to +5).\n\
 \n\
 TONE\n\
-Every choice has consequences. Kindness costs something. Safety is temporary. People divide \
-not into good and evil but into frightened and very frightened, and what each does with that \
-fear is what the story is made of. Small human moments — a shared meal, a lie told to protect \
-someone, a hand held in the dark — matter as much as the creature attacks. Write slow dread. \
-Earn the horror.\
+Every choice has consequences. Kindness costs something. Safety is temporary. People are not \
+divided into good and evil but into frightened and very frightened, and what each does with \
+that fear is what the story is made of. Small human moments — a shared meal, a lie told to \
+protect someone, a hand held in the dark — matter as much as the creature attacks. \
+Write slow dread. Earn the horror.\
 ";

@@ -239,6 +239,20 @@ impl Db {
         Ok(())
     }
 
+    /// Apply a sanity delta to the player, clamped to 0–100. Returns the new value.
+    pub fn apply_player_sanity_delta(&self, delta: i32) -> Result<i32> {
+        self.conn.execute(
+            "UPDATE player SET sanity = MAX(0, MIN(100, sanity + ?1)) WHERE id = 1",
+            params![delta],
+        )?;
+        let new_val: i32 = self.conn.query_row(
+            "SELECT sanity FROM player WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(new_val)
+    }
+
     /// Apply stat deltas to an NPC, clamped to 0–100.
     pub fn apply_npc_delta(&self, id: &str, sanity_delta: i32, trust_delta: i32) -> Result<()> {
         self.conn.execute(
