@@ -42,6 +42,11 @@ pub fn validate(call: &DirectorCall, state: &GameState) -> Result<(), RuleViolat
             }
         }
         DirectorCall::EndTurnNarrative { .. } => {}
+        DirectorCall::GrantFragment { npc_id, .. } => {
+            if !state.npcs.iter().any(|n| n.id == *npc_id && n.status == "alive") {
+                return Err(RuleViolation::NpcNotFound { id: npc_id.clone() });
+            }
+        }
     }
     Ok(())
 }
@@ -74,6 +79,7 @@ mod tests {
                 sanity: 70,
                 trust: 60,
                 status: "alive".into(),
+                fragments: 0,
             }],
         }
     }

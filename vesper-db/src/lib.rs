@@ -38,6 +38,7 @@ pub struct NpcSummary {
     pub trust: i32,
     pub status: String,
     pub residence: String,
+    pub fragments: i32,
 }
 
 impl Db {
@@ -147,10 +148,10 @@ impl Db {
         })
     }
 
-    /// All alive NPCs — used to build GameState at startup.
+    /// All NPCs — used to build GameState at startup.
     pub fn all_npcs(&self) -> Result<Vec<NpcSummary>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, role, sanity, trust, status, residence FROM npc",
+            "SELECT id, name, role, sanity, trust, status, residence, fragments_collected FROM npc",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(NpcSummary {
@@ -161,16 +162,31 @@ impl Db {
                 trust:     row.get(4)?,
                 status:    row.get(5)?,
                 residence: row.get(6)?,
+                fragments:  row.get(7)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Increment a Rememberer's fragment count; returns the new total.
+    pub fn grant_fragment(&self, npc_id: &str) -> Result<i32> {
+        self.conn.execute(
+            "UPDATE npc SET fragments_collected = fragments_collected + 1 WHERE id = ?1",
+            params![npc_id],
+        )?;
+        let total: i32 = self.conn.query_row(
+            "SELECT fragments_collected FROM npc WHERE id = ?1",
+            params![npc_id],
+            |r| r.get(0),
+        )?;
+        Ok(total)
     }
 
     /// Residents of `location` who are alive, ordered by trust desc.
     pub fn nearby_npcs(&self, location: &str, limit: usize) -> Result<Vec<NpcSummary>> {
         let residence = if location == "colony_house" { "colony_house" } else { "town" };
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, role, sanity, trust, status, residence \
+            "SELECT id, name, role, sanity, trust, status, residence, fragments_collected \
              FROM npc WHERE residence = ?1 AND status = 'alive' \
              ORDER BY trust DESC LIMIT ?2",
         )?;
@@ -183,6 +199,7 @@ impl Db {
                 trust:     row.get(4)?,
                 status:    row.get(5)?,
                 residence: row.get(6)?,
+                fragments:  row.get(7)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)

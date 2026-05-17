@@ -17,6 +17,12 @@ HARD RULES:\n\
 - Call advance_phase exactly once, as your absolute final tool call.\n\
 - Never name or hint at the identity of the two Rememberers in prose seeds.\n\
 \n\
+REMEMBERERS:\n\
+The two Rememberers are iris_calloway and wren_adisa. Only they can collect memory fragments. \
+Call grant_fragment when circumstances genuinely allow discovery — solitude, unusual locations, \
+player-facilitated exploration. Each needs 7 fragments for the win condition. \
+Their special nature must NEVER appear in any prose_seed; describe only observable behaviour.\n\
+\n\
 TONE: Road-to-hell choices. Every act of kindness has a cost. \
 Slow dread, community fracture, small human moments against the dark.";
 
@@ -64,6 +70,20 @@ fn tool_schemas() -> Value {
                     "mood": {"enum": ["tense","quiet","grief","dread","relief","confusion"]}
                 },
                 "required": ["prose_seed","mood"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "grant_fragment",
+            "description": "A Rememberer discovers a memory fragment. ONLY valid for iris_calloway or wren_adisa. Call at most once per turn per Rememberer. Only when circumstances genuinely allow discovery.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "npc_id":      {"type": "string", "enum": ["iris_calloway","wren_adisa"]},
+                    "location":    {"type": "string"},
+                    "description": {"type": "string", "maxLength": 200}
+                },
+                "required": ["npc_id","location","description"],
                 "additionalProperties": false
             }
         },
@@ -211,6 +231,16 @@ fn parse_tool_call(name: &str, input: Value) -> Option<DirectorCall> {
             struct I { prose_seed: String, mood: String }
             let i: I = serde_json::from_value(input).ok()?;
             Some(DirectorCall::EndTurnNarrative { prose_seed: i.prose_seed, mood: i.mood })
+        }
+        "grant_fragment" => {
+            #[derive(Deserialize)]
+            struct I { npc_id: String, location: String, description: String }
+            let i: I = serde_json::from_value(input).ok()?;
+            Some(DirectorCall::GrantFragment {
+                npc_id: i.npc_id,
+                location: i.location,
+                description: i.description,
+            })
         }
         _ => None,
     }

@@ -31,11 +31,13 @@ pub enum Msg {
     SidebarUpdate { player_sanity: i32, alive_count: i64, nearby: Vec<NpcBrief> },
     PhaseLabel(String),
     Sound(SoundCue),
+    GameOver { won: bool, reason: String },
 }
 
 enum GameMode {
     Processing,
     AwaitingChoice,
+    GameOver { won: bool, reason: String },
 }
 
 pub struct App {
@@ -112,6 +114,11 @@ impl App {
     }
 
     fn handle_key(&mut self, code: KeyCode) {
+        // In game-over state any key exits
+        if matches!(self.mode, GameMode::GameOver { .. }) {
+            self.quit = true;
+            return;
+        }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 let _ = self.action_tx.send(PlayerAction::Quit);
@@ -185,10 +192,18 @@ impl App {
                     s.play(cue);
                 }
             }
+            Msg::GameOver { won, reason } => {
+                self.streaming = false;
+                self.mode = GameMode::GameOver { won, reason };
+            }
         }
     }
 
     fn render(&self, frame: &mut Frame) {
+        if let GameMode::GameOver { won, reason } = &self.mode {
+            self.render_ending(frame, *won, reason);
+            return;
+        }
         let area = frame.area();
 
         let outer = Layout::default()
@@ -273,6 +288,38 @@ impl App {
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(menu_bar, outer[1]);
+    }
+
+    fn render_ending(&self, frame: &mut Frame, won: bool, reason: &str) {
+        use ratatui::layout::Alignment;
+
+        let area = frame.area();
+        let (title, colour) = if won {
+            (" THE ROAD OPENED ", Color::White)
+        } else {
+            (" ASH HOLLOW KEPT YOU ", Color::DarkGray)
+        };
+
+        let body = format!(
+            "\n\n{}\n\n\n{}\n\n\n Press any key to exit.",
+            reason,
+            if won {
+                "Both Rememberers found what was taken from them.\nThe pattern broke."
+            } else {
+                "The pattern held."
+            }
+        );
+
+        let ending = Paragraph::new(body.as_str())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(Span::styled(title, Style::default().fg(colour).add_modifier(Modifier::BOLD))),
+            )
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(colour));
+        frame.render_widget(ending, area);
     }
 }
 

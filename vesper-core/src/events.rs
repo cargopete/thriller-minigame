@@ -24,4 +24,9 @@ pub enum DirectorCall {
         prose_seed: String,
         mood: String,
     },
+    GrantFragment {
+        npc_id: String,
+        location: String,
+        description: String,
+    },
 }

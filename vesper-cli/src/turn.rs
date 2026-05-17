@@ -7,12 +7,15 @@ use vesper_ai::{
     client::{AnthropicClient, Message, StreamEvent},
     director::DirectorClient,
 };
-use vesper_core::{events::DirectorCall, rules, state::{GameState, Phase}};
+use vesper_core::{events::DirectorCall, rules, state::{GameState, NpcState, Phase}};
 use vesper_db::{Db, EventLogRow};
 use vesper_ui::{
     app::{Msg, NpcBrief, PlayerAction},
     audio::SoundCue,
 };
+
+const REMEMBERER_IDS: [&str; 2] = ["iris_calloway", "wren_adisa"];
+const FRAGMENTS_NEEDED: i32 = 7;
 
 const DIRECTOR_MODEL: &str = "claude-sonnet-4-6";
 const NARRATOR_MODEL: &str = "claude-sonnet-4-6";
@@ -84,16 +87,23 @@ impl TurnEngine {
                 PlayerAction::MenuChoice { label, .. } => {
                     let _ = self.msg_tx.send(Msg::Sound(SoundCue::Sting));
                     let _ = self.msg_tx.send(Msg::NarratorBegin);
-                    if let Err(e) = self.process_turn(&label).await {
-                        let _ = self.msg_tx.send(Msg::Error(e.to_string()));
+                    match self.process_turn(&label).await {
+                        Ok(Some((won, reason))) => {
+                            let _ = self.msg_tx.send(Msg::GameOver { won, reason });
+                            break;
+                        }
+                        Ok(None) => self.push_menu(),
+                        Err(e) => {
+                            let _ = self.msg_tx.send(Msg::Error(e.to_string()));
+                            self.push_menu();
+                        }
                     }
-                    self.push_menu();
                 }
             }
         }
     }
 
-    async fn process_turn(&mut self, player_action: &str) -> Result<()> {
+    async fn process_turn(&mut self, player_action: &str) -> Result<Option<(bool, String)>> {
         // Clone Arcs for use across await points
         let director = Arc::clone(&self.director);
         let auditor  = Arc::clone(&self.auditor);
@@ -183,7 +193,7 @@ impl TurnEngine {
         });
         let _ = msg_tx.send(Msg::PhaseLabel(self.state.phase.label(self.state.day)));
 
-        Ok(())
+        Ok(self.check_outcome())
     }
 
     async fn try_generate_summary(&mut self) {
@@ -257,8 +267,47 @@ impl TurnEngine {
                 let _ = self.msg_tx.send(Msg::Sound(SoundCue::Death));
             }
             DirectorCall::EndTurnNarrative { .. } => {}
+            DirectorCall::GrantFragment { npc_id, .. } => {
+                let new_total = self.db.grant_fragment(npc_id)?;
+                if let Some(npc) = self.state.npcs.iter_mut().find(|n| &n.id == npc_id) {
+                    npc.fragments = new_total;
+                }
+            }
         }
         Ok(())
+    }
+
+    fn check_outcome(&self) -> Option<(bool, String)> {
+        let rememberers: Vec<&NpcState> = self
+            .state
+            .npcs
+            .iter()
+            .filter(|n| REMEMBERER_IDS.contains(&n.id.as_str()))
+            .collect();
+
+        // Win: both alive with enough fragments
+        if rememberers.len() == 2
+            && rememberers.iter().all(|n| n.status == "alive" && n.fragments >= FRAGMENTS_NEEDED)
+        {
+            return Some((
+                true,
+                "The road that brought you here has opened again.".into(),
+            ));
+        }
+
+        // Lose: a Rememberer died
+        if let Some(dead) = rememberers.iter().find(|n| n.status != "alive") {
+            return Some((false, format!("{} did not survive.", dead.name)));
+        }
+
+        // Lose: time ran out (past Day 17 night)
+        if self.state.day > 17
+            || (self.state.day == 17 && self.state.phase == Phase::Night)
+        {
+            return Some((false, "Day 17 passed. Ash Hollow kept its secret — and kept you.".into()));
+        }
+
+        None
     }
 
     fn push_menu(&self) {

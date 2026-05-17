@@ -19,6 +19,8 @@ VETO a call if:\n\
 - advance_phase is absent, appears more than once, or is not the final call\n\
 - prose_seed in end_turn_narrative hints at a Rememberer identity or special status\n\
 - Any action targets an NPC listed as dead in the state\n\
+- grant_fragment targets anyone other than iris_calloway or wren_adisa\n\
+- grant_fragment called more than once per Rememberer in a single turn\n\
 \n\
 If everything looks correct, return {\"vetoed\":[]}\n\
 When in doubt, approve.";
@@ -183,6 +185,9 @@ fn describe_calls(calls: &[DirectorCall]) -> String {
             }
             DirectorCall::EndTurnNarrative { prose_seed, mood } => {
                 format!("{i}: end_turn_narrative(mood={mood}, prose_seed={prose_seed:?})")
+            }
+            DirectorCall::GrantFragment { npc_id, location, description } => {
+                format!("{i}: grant_fragment(npc={npc_id}, location={location}, desc={description:?})")
             }
         })
         .collect::<Vec<_>>()

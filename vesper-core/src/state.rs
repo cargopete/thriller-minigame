@@ -47,6 +47,7 @@ pub struct NpcState {
     pub sanity: i32,
     pub trust: i32,
     pub status: String,
+    pub fragments: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +74,7 @@ impl GameState {
                     "location": n.residence,
                     "sanity": n.sanity,
                     "trust": n.trust,
+                    "fragments": n.fragments,
                 })
             })
             .collect();

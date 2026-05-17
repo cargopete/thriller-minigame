@@ -42,6 +42,7 @@ async fn main() -> Result<()> {
                 sanity:    n.sanity,
                 trust:     n.trust,
                 status:    n.status,
+                fragments: n.fragments,
             })
             .collect(),
     };
