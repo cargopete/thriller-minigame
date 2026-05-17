@@ -87,7 +87,12 @@ Player choices trigger a descending pitch sting. NPC deaths trigger a low-freque
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# Play
 cargo run --release
+
+# Soak test (N runs, concurrency)
+cargo run --bin soak -- 10 3
 ```
 
 Requires a terminal at least 80×24. The game creates its data directory automatically.
@@ -132,5 +137,5 @@ P4 ✓  Narrator SSE → NarrativePane (completed in P3)
 P5 ✓  Auditor, rolling summary, prompt caching (World Bible)
 P6 ✓  Rememberer mechanic, memory fragments, win/lose detection
 P7 ✓  ASCII title, phase headers, journal mode, narrative persistence
-P8    soak test harness, ~5% win-rate tuning
+P8 ✓  headless soak harness (`cargo run --bin soak -- [N] [concurrency]`)
 ```

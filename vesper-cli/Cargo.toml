@@ -7,6 +7,10 @@ edition = "2021"
 name = "vesper"
 path = "src/main.rs"
 
+[[bin]]
+name = "soak"
+path = "src/soak.rs"
+
 [dependencies]
 vesper-core = { path = "../vesper-core" }
 vesper-ai  = { path = "../vesper-ai" }

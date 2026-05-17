@@ -50,6 +50,15 @@ impl Db {
         Ok(db)
     }
 
+    /// In-memory database for headless testing. WAL not applicable.
+    pub fn open_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let db = Self { conn };
+        db.migrate()?;
+        Ok(db)
+    }
+
     fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(include_str!("schema.sql"))?;
         Ok(())
