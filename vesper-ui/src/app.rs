@@ -22,10 +22,6 @@ Specific nouns. No metaphors for what is wrong; describe only what the player se
 End every passage on a still, concrete image. Never use the words epic, journey, or adventure. \
 Three short paragraphs only.";
 
-const OPENING_PROMPT: &str = "\
-The player has just arrived in Ash Hollow. Describe their first moments: the road, the diner \
-visible through the early light, and one detail that is wrong in a way they cannot quite name.";
-
 pub enum Msg {
     NarratorDelta(String),
     NarratorDone,
@@ -33,6 +29,7 @@ pub enum Msg {
 }
 
 pub struct App {
+    player_name: String,
     narrative: String,
     streaming: bool,
     scroll: u16,
@@ -41,8 +38,9 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(player_name: impl Into<String>) -> Self {
         Self {
+            player_name: player_name.into(),
             narrative: String::new(),
             streaming: true,
             scroll: 0,
@@ -58,6 +56,13 @@ impl App {
     ) -> anyhow::Result<()> {
         let (app_tx, mut app_rx) = mpsc::unbounded_channel::<Msg>();
 
+        let opening = format!(
+            "{} has just arrived in Ash Hollow. Describe their first moments: the road, \
+             the diner visible through the early light, and one detail that is wrong in a \
+             way they cannot quite name.",
+            self.player_name
+        );
+
         // Fire the opening narration immediately.
         {
             let c = client.clone();
@@ -66,7 +71,7 @@ impl App {
                 let (stx, mut srx) = mpsc::unbounded_channel::<StreamEvent>();
                 tokio::spawn(async move {
                     let _ = c
-                        .stream(MODEL, Some(SYSTEM), &[Message::user(OPENING_PROMPT)], 600, stx)
+                        .stream(MODEL, Some(SYSTEM), &[Message::user(opening)], 600, stx)
                         .await;
                 });
                 while let Some(ev) = srx.recv().await {
@@ -163,8 +168,8 @@ impl App {
 
         // Status sidebar
         let sidebar_body = format!(
-            " Day 1 / 18\n\n Sanity  ▓▓▓▓▓▓▓▓ 80\n\n {}\n\n [↑↓ / jk]  scroll\n [Q / Esc]  quit",
-            self.status
+            " {}\n Day 1 / 18\n\n Sanity  ▓▓▓▓▓▓▓▓ 80\n\n {}\n\n [↑↓ / jk]  scroll\n [Q / Esc]  quit",
+            self.player_name, self.status
         );
         let sidebar = Paragraph::new(sidebar_body.as_str())
             .block(

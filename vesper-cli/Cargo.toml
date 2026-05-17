@@ -9,7 +9,10 @@ path = "src/main.rs"
 
 [dependencies]
 vesper-ai  = { path = "../vesper-ai" }
+vesper-db  = { path = "../vesper-db" }
 vesper-ui  = { path = "../vesper-ui" }
 ratatui    = { workspace = true }
 tokio      = { workspace = true }
 anyhow     = { workspace = true }
+dialoguer  = { workspace = true }
+directories = { workspace = true }
