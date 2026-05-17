@@ -1,3 +1,5 @@
+mod npcs;
+
 use std::path::Path;
 
 use anyhow::Result;
@@ -16,6 +18,16 @@ pub struct Player {
     pub backstory: Option<String>,
     pub sanity: i32,
     pub location: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NpcSummary {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub sanity: i32,
+    pub trust: i32,
+    pub status: String,
 }
 
 impl Db {
@@ -58,6 +70,25 @@ impl Db {
                 player.backstory,
             ],
         )?;
+        self.seed_npcs()?;
+        Ok(())
+    }
+
+    fn seed_npcs(&self) -> Result<()> {
+        for n in npcs::NPC_SEEDS {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO npc \
+                 (id, name, age, gender, archetype, residence, role, \
+                  sanity, trust, is_rememberer, secret, hook) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                params![
+                    n.id, n.name, n.age, n.gender,
+                    n.archetype, n.residence, n.role,
+                    n.sanity, n.trust, n.is_rememberer,
+                    n.secret, n.hook,
+                ],
+            )?;
+        }
         Ok(())
     }
 
@@ -96,10 +127,38 @@ impl Db {
         })
     }
 
+    /// Residents of `location` who are alive, ordered by trust desc.
+    pub fn nearby_npcs(&self, location: &str, limit: usize) -> Result<Vec<NpcSummary>> {
+        let residence = if location == "colony_house" { "colony_house" } else { "town" };
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, role, sanity, trust, status \
+             FROM npc WHERE residence = ?1 AND status = 'alive' \
+             ORDER BY trust DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![residence, limit as i64], |row| {
+            Ok(NpcSummary {
+                id:     row.get(0)?,
+                name:   row.get(1)?,
+                role:   row.get(2)?,
+                sanity: row.get(3)?,
+                trust:  row.get(4)?,
+                status: row.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Total alive NPC count.
+    pub fn alive_count(&self) -> Result<i64> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM npc WHERE status = 'alive'", [], |r| r.get(0))
+            .map_err(Into::into)
+    }
+
     /// Clear all save data (new game).
     pub fn wipe(&self) -> Result<()> {
         self.conn
-            .execute_batch("DELETE FROM player; DELETE FROM save;")?;
+            .execute_batch("DELETE FROM npc; DELETE FROM player; DELETE FROM save;")?;
         Ok(())
     }
 }

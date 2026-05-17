@@ -8,6 +8,26 @@ CREATE TABLE IF NOT EXISTS save (
     updated_at TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS npc (
+    id                  TEXT    PRIMARY KEY,
+    name                TEXT    NOT NULL,
+    age                 INTEGER,
+    gender              TEXT,
+    archetype           TEXT    NOT NULL,
+    residence           TEXT    NOT NULL CHECK (residence IN ('town','colony_house','wanderer','dead')),
+    role                TEXT    NOT NULL,
+    sanity              INTEGER NOT NULL,
+    trust               INTEGER NOT NULL,
+    status              TEXT    NOT NULL DEFAULT 'alive',
+    is_rememberer       INTEGER NOT NULL DEFAULT 0,
+    fragments_collected INTEGER NOT NULL DEFAULT 0,
+    secret              TEXT,
+    hook                TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_npc_residence ON npc(residence);
+CREATE INDEX IF NOT EXISTS idx_npc_status    ON npc(status);
+
 CREATE TABLE IF NOT EXISTS player (
     id             INTEGER PRIMARY KEY CHECK (id = 1),
     name           TEXT    NOT NULL,

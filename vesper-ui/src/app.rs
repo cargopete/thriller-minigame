@@ -22,6 +22,11 @@ Specific nouns. No metaphors for what is wrong; describe only what the player se
 End every passage on a still, concrete image. Never use the words epic, journey, or adventure. \
 Three short paragraphs only.";
 
+pub struct NpcBrief {
+    pub name: String,
+    pub role: String,
+}
+
 pub enum Msg {
     NarratorDelta(String),
     NarratorDone,
@@ -30,6 +35,8 @@ pub enum Msg {
 
 pub struct App {
     player_name: String,
+    nearby: Vec<NpcBrief>,
+    alive_count: i64,
     narrative: String,
     streaming: bool,
     scroll: u16,
@@ -38,9 +45,15 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(player_name: impl Into<String>) -> Self {
+    pub fn new(
+        player_name: impl Into<String>,
+        nearby: Vec<NpcBrief>,
+        alive_count: i64,
+    ) -> Self {
         Self {
             player_name: player_name.into(),
+            nearby,
+            alive_count,
             narrative: String::new(),
             streaming: true,
             scroll: 0,
@@ -63,7 +76,6 @@ impl App {
             self.player_name
         );
 
-        // Fire the opening narration immediately.
         {
             let c = client.clone();
             let tx = app_tx.clone();
@@ -140,19 +152,17 @@ impl App {
     fn render(&self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Outer: content + menu bar
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(3)])
             .split(area);
 
-        // Inner: narrative (70%) | sidebar (30%)
         let inner = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
             .split(outer[0]);
 
-        // Narrative pane — streams in via SSE deltas
+        // Narrative pane
         let spinner = if self.streaming { " ▒" } else { "" };
         let narrative = Paragraph::new(self.narrative.as_str())
             .block(
@@ -167,11 +177,24 @@ impl App {
         frame.render_widget(narrative, inner[0]);
 
         // Status sidebar
-        let sidebar_body = format!(
-            " {}\n Day 1 / 18\n\n Sanity  ▓▓▓▓▓▓▓▓ 80\n\n {}\n\n [↑↓ / jk]  scroll\n [Q / Esc]  quit",
-            self.player_name, self.status
+        let mut sidebar = format!(
+            " {}\n Day 1 / 18\n\n Sanity  ▓▓▓▓▓▓▓▓ {:>2}\n Alive   {:>2} / 55\n",
+            self.player_name, 80, self.alive_count
         );
-        let sidebar = Paragraph::new(sidebar_body.as_str())
+
+        if !self.nearby.is_empty() {
+            sidebar.push_str("\n Nearby\n");
+            for npc in &self.nearby {
+                sidebar.push_str(&format!("  • {}\n", npc.name));
+            }
+        }
+
+        sidebar.push_str(&format!(
+            "\n {}\n\n [↑↓/jk] scroll\n [Q/Esc] quit",
+            self.status
+        ));
+
+        let status_pane = Paragraph::new(sidebar.as_str())
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -179,7 +202,7 @@ impl App {
             )
             .wrap(Wrap { trim: false })
             .style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(sidebar, inner[1]);
+        frame.render_widget(status_pane, inner[1]);
 
         // Menu bar
         let menu = Paragraph::new("  [Q / Esc] quit    [↑↓ / jk] scroll  ")

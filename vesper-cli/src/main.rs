@@ -6,7 +6,7 @@ use directories::ProjectDirs;
 
 use vesper_ai::client::AnthropicClient;
 use vesper_db::{Db, Player};
-use vesper_ui::app::App;
+use vesper_ui::app::{App, NpcBrief};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,9 +16,18 @@ async fn main() -> Result<()> {
     let db = open_db()?;
     let player = resolve_player(&db)?;
 
+    let nearby = db
+        .nearby_npcs(&player.location, 6)?
+        .into_iter()
+        .map(|n| NpcBrief { name: n.name, role: n.role })
+        .collect::<Vec<_>>();
+    let alive = db.alive_count()?;
+
     let client = Arc::new(AnthropicClient::new(api_key));
     let mut terminal = ratatui::init();
-    let result = App::new(player.name).run(&mut terminal, client).await;
+    let result = App::new(player.name, nearby, alive)
+        .run(&mut terminal, client)
+        .await;
     ratatui::restore();
     result
 }
@@ -31,7 +40,6 @@ fn open_db() -> Result<Db> {
     Db::open(&data.join("vesper.db"))
 }
 
-/// Returns the player to play as — either a resumed save or a freshly created one.
 fn resolve_player(db: &Db) -> Result<Player> {
     if db.has_save()? {
         let player = db.load_player()?;
@@ -76,11 +84,7 @@ fn run_wizard(db: &Db) -> Result<Player> {
         .with_prompt("Age (leave blank to skip)")
         .allow_empty(true)
         .interact_text()?;
-    let age: Option<i32> = age_str
-        .trim()
-        .parse()
-        .ok()
-        .filter(|&n: &i32| n > 0);
+    let age: Option<i32> = age_str.trim().parse().ok().filter(|&n: &i32| n > 0);
 
     let interest_opts = [
         "Looking after someone",
@@ -104,11 +108,8 @@ fn run_wizard(db: &Db) -> Result<Player> {
         .with_prompt("Last thing you remember before the road (leave blank to skip)")
         .allow_empty(true)
         .interact_text()?;
-    let backstory = backstory_raw
-        .trim()
-        .is_empty()
-        .then_some(None)
-        .unwrap_or_else(|| Some(backstory_raw.trim().to_string()));
+    let backstory = (!backstory_raw.trim().is_empty())
+        .then(|| backstory_raw.trim().to_string());
 
     let player = Player {
         name,
