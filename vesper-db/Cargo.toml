@@ -1,0 +1,8 @@
+[package]
+name = "vesper-db"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { workspace = true }
+anyhow   = { workspace = true }

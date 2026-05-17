@@ -1,0 +1,15 @@
+[package]
+name = "vesper-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "vesper"
+path = "src/main.rs"
+
+[dependencies]
+vesper-ai  = { path = "../vesper-ai" }
+vesper-ui  = { path = "../vesper-ui" }
+ratatui    = { workspace = true }
+tokio      = { workspace = true }
+anyhow     = { workspace = true }

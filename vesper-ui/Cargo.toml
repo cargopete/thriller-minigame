@@ -1,0 +1,12 @@
+[package]
+name = "vesper-ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vesper-ai = { path = "../vesper-ai" }
+ratatui   = { workspace = true }
+crossterm = { workspace = true }
+tokio     = { workspace = true }
+futures   = { workspace = true }
+anyhow    = { workspace = true }
