@@ -75,7 +75,7 @@ impl TurnEngine {
         let _ = self.msg_tx.send(Msg::NarratorBegin);
         let narrator = Arc::clone(&self.narrator);
         let msg_tx = self.msg_tx.clone();
-        if let Err(e) = Self::narrate_with(narrator, msg_tx, &opening).await {
+        if let Err(e) = Self::narrate_with(narrator, msg_tx, &opening).await.map(|_| ()) {
             let _ = self.msg_tx.send(Msg::Error(e.to_string()));
         }
         self.push_menu();
@@ -142,21 +142,6 @@ impl TurnEngine {
             }
         }
 
-        // Log the turn
-        let payload = format!(
-            "{{\"action\":{:?},\"calls\":{},\"approved\":{}}}",
-            player_action,
-            calls.len(),
-            approvals.iter().filter(|&&a| a).count()
-        );
-        let _ = self.db.log_event(
-            self.state.day,
-            self.state.phase.as_str(),
-            "turn",
-            &payload,
-            None,
-        );
-
         // 4. Narrator writes the scene
         let prompt = if prose_seed.is_empty() {
             format!(
@@ -169,7 +154,22 @@ impl TurnEngine {
                 self.state.day, self.state.phase.as_str(), mood, prose_seed, player_action
             )
         };
-        Self::narrate_with(narrator, msg_tx.clone(), &prompt).await?;
+        let narrative_text = Self::narrate_with(narrator, msg_tx.clone(), &prompt).await?;
+
+        // Log the turn with narrative text
+        let payload = format!(
+            "{{\"action\":{:?},\"calls\":{},\"approved\":{}}}",
+            player_action,
+            calls.len(),
+            approvals.iter().filter(|&&a| a).count()
+        );
+        let _ = self.db.log_event(
+            self.state.day,
+            self.state.phase.as_str(),
+            "turn",
+            &payload,
+            Some(&narrative_text),
+        );
 
         // 5. Rolling summary every 3 days (after night→dawn transition)
         if self.state.phase == Phase::Dawn && self.state.day % 3 == 0 {
@@ -223,7 +223,7 @@ impl TurnEngine {
         narrator: Arc<AnthropicClient>,
         msg_tx: mpsc::UnboundedSender<Msg>,
         prompt: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let (stx, mut srx) = mpsc::unbounded_channel::<StreamEvent>();
         let prompt = prompt.to_string();
         tokio::spawn(async move {
@@ -231,17 +231,21 @@ impl TurnEngine {
                 .stream(NARRATOR_MODEL, Some(NARRATOR_SYSTEM), &[Message::user(prompt)], 600, stx)
                 .await;
         });
+        let mut text = String::new();
         while let Some(ev) = srx.recv().await {
             match ev {
-                StreamEvent::Delta(t)  => { let _ = msg_tx.send(Msg::NarratorDelta(t)); }
-                StreamEvent::Done      => { let _ = msg_tx.send(Msg::NarratorDone); break; }
-                StreamEvent::Error(e)  => {
+                StreamEvent::Delta(t) => {
+                    text.push_str(&t);
+                    let _ = msg_tx.send(Msg::NarratorDelta(t));
+                }
+                StreamEvent::Done => { let _ = msg_tx.send(Msg::NarratorDone); break; }
+                StreamEvent::Error(e) => {
                     let _ = msg_tx.send(Msg::Error(e.clone()));
                     anyhow::bail!(e);
                 }
             }
         }
-        Ok(())
+        Ok(text)
     }
 
     fn apply(&mut self, call: &DirectorCall) -> Result<()> {

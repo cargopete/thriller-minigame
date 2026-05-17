@@ -2,7 +2,7 @@ use crate::audio::{SoundCue, SoundEngine};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
 use futures::StreamExt;
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -21,7 +21,7 @@ pub enum PlayerAction {
 }
 
 pub enum Msg {
-    /// Clear the narrative pane and start streaming.
+    /// Clear narrative pane and start streaming.
     NarratorBegin,
     NarratorDelta(String),
     NarratorDone,
@@ -37,6 +37,7 @@ pub enum Msg {
 enum GameMode {
     Processing,
     AwaitingChoice,
+    Journal,
     GameOver { won: bool, reason: String },
 }
 
@@ -46,9 +47,13 @@ pub struct App {
     alive_count: i64,
     player_sanity: i32,
     phase_label: String,
+    /// Current turn's narrative (streaming in).
     narrative: String,
+    /// All previous turns' narratives, oldest first.
+    history: Vec<String>,
     streaming: bool,
     scroll: u16,
+    journal_scroll: u16,
     status: String,
     mode: GameMode,
     menu_options: Vec<String>,
@@ -73,9 +78,11 @@ impl App {
             player_sanity,
             status: "Entering Ash Hollow…".into(),
             phase_label,
-            narrative: String::new(),
+            narrative: " V  E  S  P  E  R\n ─────────────────\n Ash Hollow is waiting…".into(),
+            history: vec![],
             streaming: true,
             scroll: 0,
+            journal_scroll: 0,
             mode: GameMode::Processing,
             menu_options: vec![],
             quit: false,
@@ -114,11 +121,29 @@ impl App {
     }
 
     fn handle_key(&mut self, code: KeyCode) {
-        // In game-over state any key exits
+        // Game over: any key exits
         if matches!(self.mode, GameMode::GameOver { .. }) {
             self.quit = true;
             return;
         }
+
+        // Journal mode: J or Esc closes it; ↑↓ scroll
+        if matches!(self.mode, GameMode::Journal) {
+            match code {
+                KeyCode::Char('J') | KeyCode::Esc => {
+                    self.mode = GameMode::AwaitingChoice;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.journal_scroll = self.journal_scroll.saturating_add(1);
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.journal_scroll = self.journal_scroll.saturating_sub(1);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 let _ = self.action_tx.send(PlayerAction::Quit);
@@ -130,11 +155,17 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.scroll = self.scroll.saturating_sub(1);
             }
+            // Open journal only when waiting — not mid-stream
+            KeyCode::Char('J') => {
+                if matches!(self.mode, GameMode::AwaitingChoice) {
+                    self.journal_scroll = 0;
+                    self.mode = GameMode::Journal;
+                }
+            }
             KeyCode::Char(c) => {
                 if matches!(self.mode, GameMode::AwaitingChoice) {
                     if let Some(digit) = c.to_digit(10) {
                         let idx = digit as usize;
-                        // 1-based
                         if idx > 0 && idx <= self.menu_options.len() {
                             let label = self.menu_options[idx - 1].clone();
                             let _ = self.action_tx.send(PlayerAction::MenuChoice {
@@ -154,7 +185,11 @@ impl App {
     fn handle_msg(&mut self, msg: Msg) {
         match msg {
             Msg::NarratorBegin => {
-                self.narrative.clear();
+                // Archive the previous scene before starting a new one
+                if !self.narrative.is_empty() {
+                    self.history.push(self.narrative.clone());
+                }
+                self.narrative = format!("── {} ──\n\n", self.phase_label);
                 self.scroll = 0;
                 self.streaming = true;
                 self.status = "…".into();
@@ -200,10 +235,18 @@ impl App {
     }
 
     fn render(&self, frame: &mut Frame) {
-        if let GameMode::GameOver { won, reason } = &self.mode {
-            self.render_ending(frame, *won, reason);
-            return;
+        match &self.mode {
+            GameMode::GameOver { won, reason } => {
+                self.render_ending(frame, *won, reason);
+                return;
+            }
+            GameMode::Journal => {
+                self.render_journal(frame);
+                return;
+            }
+            _ => {}
         }
+
         let area = frame.area();
 
         let outer = Layout::default()
@@ -279,10 +322,11 @@ impl App {
         frame.render_widget(sidebar, inner[1]);
 
         // Bottom bar
-        let bottom_text = if matches!(self.mode, GameMode::AwaitingChoice) {
-            "  [1–5] choose   [↑↓/jk] scroll   [Q/Esc] quit  "
-        } else {
-            "  Processing…    [↑↓/jk] scroll   [Q/Esc] quit  "
+        let bottom_text = match &self.mode {
+            GameMode::AwaitingChoice =>
+                "  [1–5] choose   [J] journal   [↑↓/jk] scroll   [Q/Esc] quit  ",
+            _ =>
+                "  Processing…                  [↑↓/jk] scroll   [Q/Esc] quit  ",
         };
         let menu_bar = Paragraph::new(bottom_text)
             .block(Block::default().borders(Borders::ALL))
@@ -290,9 +334,35 @@ impl App {
         frame.render_widget(menu_bar, outer[1]);
     }
 
-    fn render_ending(&self, frame: &mut Frame, won: bool, reason: &str) {
-        use ratatui::layout::Alignment;
+    fn render_journal(&self, frame: &mut Frame) {
+        let area = frame.area();
 
+        let full_text = if self.history.is_empty() {
+            self.narrative.clone()
+        } else {
+            format!(
+                "{}\n\n──── current ────\n\n{}",
+                self.history.join("\n\n──────────\n\n"),
+                self.narrative
+            )
+        };
+
+        let journal = Paragraph::new(full_text.as_str())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(Span::styled(
+                        " JOURNAL — [J/Esc] close   [↑↓/jk] scroll ",
+                        Style::default().fg(Color::Yellow),
+                    )),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((self.journal_scroll, 0))
+            .style(Style::default().fg(Color::Gray));
+        frame.render_widget(journal, area);
+    }
+
+    fn render_ending(&self, frame: &mut Frame, won: bool, reason: &str) {
         let area = frame.area();
         let (title, colour) = if won {
             (" THE ROAD OPENED ", Color::White)

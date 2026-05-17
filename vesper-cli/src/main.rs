@@ -18,6 +18,7 @@ async fn main() -> Result<()> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .context("ANTHROPIC_API_KEY not set")?;
 
+    print_title();
     let db = open_db()?;
     let player = resolve_player(&db)?;
 
@@ -68,6 +69,19 @@ async fn main() -> Result<()> {
     result
 }
 
+fn print_title() {
+    println!();
+    println!("  ╔══════════════════════════════════════════════╗");
+    println!("  ║                                              ║");
+    println!("  ║          V  E  S  P  E  R                    ║");
+    println!("  ║                                              ║");
+    println!("  ║   The road brought you here.                 ║");
+    println!("  ║   It will not take you back.                 ║");
+    println!("  ║                                              ║");
+    println!("  ╚══════════════════════════════════════════════╝");
+    println!();
+}
+
 fn open_db() -> Result<Db> {
     let dirs = ProjectDirs::from("", "", "vesper")
         .context("cannot determine data directory")?;
@@ -95,9 +109,6 @@ fn resolve_player(db: &Db) -> Result<Player> {
 fn run_wizard(db: &Db) -> Result<Player> {
     println!();
     println!("  A R R I V A L");
-    println!();
-    println!("  The road brought you here.");
-    println!("  It will not take you back.");
     println!();
     println!("  Before you enter Ash Hollow, tell us who you are.");
     println!();
