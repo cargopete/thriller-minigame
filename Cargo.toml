@@ -19,3 +19,4 @@ thiserror          = "2"
 tracing            = "0.1"
 directories        = "5"
 dialoguer          = { version = "0.12", features = ["fuzzy-select"] }
+rodio              = "0.19"

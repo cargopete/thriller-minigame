@@ -28,6 +28,23 @@ CREATE TABLE IF NOT EXISTS npc (
 CREATE INDEX IF NOT EXISTS idx_npc_residence ON npc(residence);
 CREATE INDEX IF NOT EXISTS idx_npc_status    ON npc(status);
 
+CREATE TABLE IF NOT EXISTS event_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    day          INTEGER NOT NULL,
+    phase        TEXT    NOT NULL,
+    kind         TEXT    NOT NULL,
+    payload_json TEXT    NOT NULL,
+    narrative_md TEXT,
+    ts           TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS summary (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    through_day INTEGER NOT NULL,
+    text        TEXT    NOT NULL,
+    ts          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS player (
     id             INTEGER PRIMARY KEY CHECK (id = 1),
     name           TEXT    NOT NULL,

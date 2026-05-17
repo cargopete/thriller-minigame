@@ -3,10 +3,15 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
 use directories::ProjectDirs;
+use tokio::sync::mpsc;
 
-use vesper_ai::client::AnthropicClient;
+use vesper_ai::{auditor::AuditorClient, client::AnthropicClient, director::DirectorClient};
+use vesper_core::state::{GameState, NpcState, Phase};
 use vesper_db::{Db, Player};
-use vesper_ui::app::{App, NpcBrief};
+use vesper_ui::app::{App, Msg, PlayerAction};
+
+mod turn;
+use turn::TurnEngine;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,17 +21,47 @@ async fn main() -> Result<()> {
     let db = open_db()?;
     let player = resolve_player(&db)?;
 
-    let nearby = db
-        .nearby_npcs(&player.location, 6)?
-        .into_iter()
-        .map(|n| NpcBrief { name: n.name, role: n.role })
-        .collect::<Vec<_>>();
-    let alive = db.alive_count()?;
+    // Build GameState from DB
+    let (day, phase_str) = db.get_save()?;
+    let all_npcs = db.all_npcs()?;
+    let alive_count = db.alive_count()?;
 
-    let client = Arc::new(AnthropicClient::new(api_key));
+    let state = GameState {
+        day,
+        phase: Phase::from_str(&phase_str),
+        player_name: player.name.clone(),
+        player_sanity: player.sanity,
+        player_location: player.location.clone(),
+        npcs: all_npcs
+            .into_iter()
+            .map(|n| NpcState {
+                id:        n.id,
+                name:      n.name,
+                role:      n.role,
+                residence: n.residence,
+                sanity:    n.sanity,
+                trust:     n.trust,
+                status:    n.status,
+            })
+            .collect(),
+    };
+
+    let phase_label = state.phase.label(state.day);
+
+    // Wire channels
+    let (msg_tx, msg_rx) = mpsc::unbounded_channel::<Msg>();
+    let (action_tx, action_rx) = mpsc::unbounded_channel::<PlayerAction>();
+
+    let director = Arc::new(DirectorClient::new(&api_key));
+    let auditor  = Arc::new(AuditorClient::new(&api_key));
+    let narrator = Arc::new(AnthropicClient::new(api_key));
+
+    let engine = TurnEngine::new(db, director, auditor, narrator, state, action_rx, msg_tx);
+    tokio::spawn(async move { engine.run().await });
+
     let mut terminal = ratatui::init();
-    let result = App::new(player.name, nearby, alive)
-        .run(&mut terminal, client)
+    let result = App::new(player.name, alive_count, player.sanity, phase_label, action_tx)
+        .run(&mut terminal, msg_rx)
         .await;
     ratatui::restore();
     result

@@ -8,6 +8,7 @@ name = "vesper"
 path = "src/main.rs"
 
 [dependencies]
+vesper-core = { path = "../vesper-core" }
 vesper-ai  = { path = "../vesper-ai" }
 vesper-db  = { path = "../vesper-db" }
 vesper-ui  = { path = "../vesper-ui" }

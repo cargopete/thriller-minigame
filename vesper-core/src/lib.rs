@@ -1,2 +1,4 @@
-// Game rules, state, and events — pure Rust, no I/O.
-// Expanded in P3.
+pub mod events;
+pub mod rules;
+pub mod state;
+pub mod world;

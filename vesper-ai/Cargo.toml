@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+vesper-core        = { path = "../vesper-core" }
 reqwest            = { workspace = true }
 eventsource-stream = { workspace = true }
 serde              = { workspace = true }

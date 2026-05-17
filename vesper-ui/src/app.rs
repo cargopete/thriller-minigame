@@ -1,106 +1,92 @@
-use std::sync::Arc;
-
+use crate::audio::{SoundCue, SoundEngine};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
 use futures::StreamExt;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     DefaultTerminal, Frame,
 };
 use tokio::sync::mpsc;
-
-use vesper_ai::client::{AnthropicClient, Message, StreamEvent};
-
-const MODEL: &str = "claude-sonnet-4-6";
-
-const SYSTEM: &str = "\
-You are the narrator of VESPER, a survival horror game set in Ash Hollow — a town nobody \
-planned to visit and nobody can leave. Write in third-person past tense. Short sentences. \
-Specific nouns. No metaphors for what is wrong; describe only what the player sees. \
-End every passage on a still, concrete image. Never use the words epic, journey, or adventure. \
-Three short paragraphs only.";
 
 pub struct NpcBrief {
     pub name: String,
     pub role: String,
 }
 
+pub enum PlayerAction {
+    MenuChoice { index: usize, label: String },
+    Quit,
+}
+
 pub enum Msg {
+    /// Clear the narrative pane and start streaming.
+    NarratorBegin,
     NarratorDelta(String),
     NarratorDone,
     Error(String),
+    /// Engine finished processing; here are the next menu options.
+    MenuReady(Vec<String>),
+    SidebarUpdate { player_sanity: i32, alive_count: i64, nearby: Vec<NpcBrief> },
+    PhaseLabel(String),
+    Sound(SoundCue),
+}
+
+enum GameMode {
+    Processing,
+    AwaitingChoice,
 }
 
 pub struct App {
     player_name: String,
     nearby: Vec<NpcBrief>,
     alive_count: i64,
+    player_sanity: i32,
+    phase_label: String,
     narrative: String,
     streaming: bool,
     scroll: u16,
     status: String,
+    mode: GameMode,
+    menu_options: Vec<String>,
     quit: bool,
+    action_tx: mpsc::UnboundedSender<PlayerAction>,
+    sound: Option<SoundEngine>,
 }
 
 impl App {
     pub fn new(
         player_name: impl Into<String>,
-        nearby: Vec<NpcBrief>,
         alive_count: i64,
+        player_sanity: i32,
+        phase_label: impl Into<String>,
+        action_tx: mpsc::UnboundedSender<PlayerAction>,
     ) -> Self {
+        let phase_label = phase_label.into();
         Self {
             player_name: player_name.into(),
-            nearby,
+            nearby: vec![],
             alive_count,
+            player_sanity,
+            status: "Entering Ash Hollow…".into(),
+            phase_label,
             narrative: String::new(),
             streaming: true,
             scroll: 0,
-            status: "Entering Ash Hollow…".into(),
+            mode: GameMode::Processing,
+            menu_options: vec![],
             quit: false,
+            action_tx,
+            sound: SoundEngine::try_init(),
         }
     }
 
     pub async fn run(
         mut self,
         terminal: &mut DefaultTerminal,
-        client: Arc<AnthropicClient>,
+        mut msg_rx: mpsc::UnboundedReceiver<Msg>,
     ) -> anyhow::Result<()> {
-        let (app_tx, mut app_rx) = mpsc::unbounded_channel::<Msg>();
-
-        let opening = format!(
-            "{} has just arrived in Ash Hollow. Describe their first moments: the road, \
-             the diner visible through the early light, and one detail that is wrong in a \
-             way they cannot quite name.",
-            self.player_name
-        );
-
-        {
-            let c = client.clone();
-            let tx = app_tx.clone();
-            tokio::spawn(async move {
-                let (stx, mut srx) = mpsc::unbounded_channel::<StreamEvent>();
-                tokio::spawn(async move {
-                    let _ = c
-                        .stream(MODEL, Some(SYSTEM), &[Message::user(opening)], 600, stx)
-                        .await;
-                });
-                while let Some(ev) = srx.recv().await {
-                    let msg = match ev {
-                        StreamEvent::Delta(t) => Msg::NarratorDelta(t),
-                        StreamEvent::Done => Msg::NarratorDone,
-                        StreamEvent::Error(e) => Msg::Error(e),
-                    };
-                    let done = matches!(msg, Msg::NarratorDone | Msg::Error(_));
-                    let _ = tx.send(msg);
-                    if done {
-                        break;
-                    }
-                }
-            });
-        }
-
         let mut events = EventStream::new();
 
         loop {
@@ -110,20 +96,11 @@ impl App {
                 Some(Ok(ev)) = events.next() => {
                     if let Event::Key(key) = ev {
                         if key.kind == KeyEventKind::Press {
-                            match key.code {
-                                KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    self.scroll = self.scroll.saturating_add(1);
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    self.scroll = self.scroll.saturating_sub(1);
-                                }
-                                _ => {}
-                            }
+                            self.handle_key(key.code);
                         }
                     }
                 }
-                Some(msg) = app_rx.recv() => self.handle(msg),
+                Some(msg) = msg_rx.recv() => self.handle_msg(msg),
             }
 
             if self.quit {
@@ -134,17 +111,79 @@ impl App {
         Ok(())
     }
 
-    fn handle(&mut self, msg: Msg) {
+    fn handle_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                let _ = self.action_tx.send(PlayerAction::Quit);
+                self.quit = true;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll = self.scroll.saturating_add(1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll = self.scroll.saturating_sub(1);
+            }
+            KeyCode::Char(c) => {
+                if matches!(self.mode, GameMode::AwaitingChoice) {
+                    if let Some(digit) = c.to_digit(10) {
+                        let idx = digit as usize;
+                        // 1-based
+                        if idx > 0 && idx <= self.menu_options.len() {
+                            let label = self.menu_options[idx - 1].clone();
+                            let _ = self.action_tx.send(PlayerAction::MenuChoice {
+                                index: idx - 1,
+                                label,
+                            });
+                            self.mode = GameMode::Processing;
+                            self.status = "Thinking…".into();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_msg(&mut self, msg: Msg) {
         match msg {
-            Msg::NarratorDelta(t) => self.narrative.push_str(&t),
+            Msg::NarratorBegin => {
+                self.narrative.clear();
+                self.scroll = 0;
+                self.streaming = true;
+                self.status = "…".into();
+            }
+            Msg::NarratorDelta(t) => {
+                self.narrative.push_str(&t);
+            }
             Msg::NarratorDone => {
                 self.streaming = false;
-                self.status = "Day 1, Dawn  —  Ash Hollow".into();
+                self.status = self.phase_label.clone();
             }
             Msg::Error(e) => {
-                self.narrative.push_str(&format!("\n\n[{}]", e));
+                self.narrative.push_str(&format!("\n\n[Error: {e}]"));
                 self.streaming = false;
                 self.status = "Error".into();
+            }
+            Msg::MenuReady(opts) => {
+                self.menu_options = opts;
+                self.mode = GameMode::AwaitingChoice;
+                if !self.streaming {
+                    self.status = self.phase_label.clone();
+                }
+            }
+            Msg::SidebarUpdate { player_sanity, alive_count, nearby } => {
+                self.player_sanity = player_sanity;
+                self.alive_count = alive_count;
+                self.nearby = nearby;
+            }
+            Msg::PhaseLabel(label) => {
+                self.phase_label = label.clone();
+                self.status = label;
+            }
+            Msg::Sound(cue) => {
+                if let Some(s) = &self.sound {
+                    s.play(cue);
+                }
             }
         }
     }
@@ -176,25 +215,45 @@ impl App {
             .style(Style::default().fg(Color::Gray));
         frame.render_widget(narrative, inner[0]);
 
-        // Status sidebar
-        let mut sidebar = format!(
-            " {}\n Day 1 / 18\n\n Sanity  ▓▓▓▓▓▓▓▓ {:>2}\n Alive   {:>2} / 55\n",
-            self.player_name, 80, self.alive_count
-        );
+        // Sidebar
+        let sanity_bars = sanity_bar(self.player_sanity);
+        let mut lines: Vec<Line> = vec![
+            Line::from(format!(" {}", self.player_name)),
+            Line::from(format!(" {}", self.phase_label)),
+            Line::from(""),
+            Line::from(format!(" Sanity  {} {:>3}", sanity_bars, self.player_sanity)),
+            Line::from(format!(" Alive   {:>2} / 55", self.alive_count)),
+        ];
 
         if !self.nearby.is_empty() {
-            sidebar.push_str("\n Nearby\n");
+            lines.push(Line::from(""));
+            lines.push(Line::from(" Nearby"));
             for npc in &self.nearby {
-                sidebar.push_str(&format!("  • {}\n", npc.name));
+                lines.push(Line::from(format!("  • {}", npc.name)));
             }
         }
 
-        sidebar.push_str(&format!(
-            "\n {}\n\n [↑↓/jk] scroll\n [Q/Esc] quit",
-            self.status
-        ));
+        if matches!(self.mode, GameMode::AwaitingChoice) && !self.menu_options.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                " — choose —",
+                Style::default().fg(Color::Yellow),
+            )));
+            for (i, opt) in self.menu_options.iter().enumerate() {
+                lines.push(Line::from(Span::styled(
+                    format!(" [{}] {}", i + 1, opt),
+                    Style::default().fg(Color::White),
+                )));
+            }
+        }
 
-        let status_pane = Paragraph::new(sidebar.as_str())
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(" {}", self.status),
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let sidebar = Paragraph::new(lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -202,12 +261,23 @@ impl App {
             )
             .wrap(Wrap { trim: false })
             .style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(status_pane, inner[1]);
+        frame.render_widget(sidebar, inner[1]);
 
-        // Menu bar
-        let menu = Paragraph::new("  [Q / Esc] quit    [↑↓ / jk] scroll  ")
+        // Bottom bar
+        let bottom_text = if matches!(self.mode, GameMode::AwaitingChoice) {
+            "  [1–5] choose   [↑↓/jk] scroll   [Q/Esc] quit  "
+        } else {
+            "  Processing…    [↑↓/jk] scroll   [Q/Esc] quit  "
+        };
+        let menu_bar = Paragraph::new(bottom_text)
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(menu, outer[1]);
+        frame.render_widget(menu_bar, outer[1]);
     }
+}
+
+fn sanity_bar(sanity: i32) -> String {
+    let filled = (sanity.clamp(0, 100) / 12) as usize;
+    let empty = 8usize.saturating_sub(filled);
+    format!("{}{}", "▓".repeat(filled), "░".repeat(empty))
 }
