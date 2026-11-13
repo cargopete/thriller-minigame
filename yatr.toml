@@ -1,0 +1,44 @@
+# yatr - https://github.com/cargopete/yatr
+
+[env]
+CARGO_TERM_COLOR = "always"
+
+[settings]
+cache = true
+
+[tasks.fmt]
+desc = "Format the tree"
+run = ["cargo fmt --all"]
+no_cache = true
+
+[tasks.fmt-check]
+desc = "Fail if the tree is unformatted"
+run = ["cargo fmt --all --check"]
+sources = ["vesper-*/src/**"]
+
+[tasks.lint]
+desc = "Clippy with warnings denied"
+run = ["cargo clippy --workspace --all-targets -- -D warnings"]
+sources = ["vesper-*/**", "Cargo.toml", "Cargo.lock"]
+
+[tasks.test]
+desc = "The test suite (the rules guard; nothing calls the API)"
+run = ["cargo test --workspace"]
+sources = ["vesper-*/**", "Cargo.toml", "Cargo.lock"]
+watch = ["vesper-*/src/**"]
+
+[tasks.play]
+desc = "Play in this terminal (needs ANTHROPIC_API_KEY)"
+foreground = true
+run = ["cargo run --release"]
+
+# Real playthroughs against the Anthropic API, so it spends money.
+[tasks.soak]
+desc = "Headless soak: 10 runs, 3 at a time (needs ANTHROPIC_API_KEY)"
+run = ["cargo run --bin soak -- 10 3"]
+no_cache = true
+
+[tasks.ci]
+desc = "fmt-check, lint, test"
+depends = ["fmt-check", "lint", "test"]
+run = []
